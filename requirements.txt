@@ -1,0 +1,15 @@
+dnspython==2.2.1
+asyncio
+quart
+uvicorn[standard]
+requests
+schedule
+aiofiles 
+watchdog 
+psutil
+python-socketio
+python-engineio
+GitPython
+loguru
+wonderwords
+tomli; python_version < "3.11"

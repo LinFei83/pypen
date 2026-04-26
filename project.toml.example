@@ -1,0 +1,141 @@
+# =============================================================================
+# project.toml — Sample / annotated configuration
+# =============================================================================
+# Copy this file to `project.toml` and edit it to match your deployment.
+#
+# File layout:
+#   [defaults]   — global fallbacks shared by every [[project]]
+#   [upstream]   — optional auto-update from a remote git repo on startup
+#   [[project]]  — one entry per worker (no upper limit)
+#     [project.env]   — environment variables passed to that worker
+#     [project.cron]  — restart / idle / git-pull schedule for that worker
+#
+# Notes on TOML scoping:
+#   `[project.env]` and `[project.cron]` are sub-tables of the most recent
+#   `[[project]]` array entry. Always place them directly below the
+#   `[[project]]` table they belong to.
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# [defaults] — applied to every [[project]] unless the project overrides them.
+# -----------------------------------------------------------------------------
+[defaults]
+# Python version used to build the per-project venv (via pyenv).
+# A project may override this with its own `python_version` field.
+python_version = "3.11"
+
+# System packages installed once at worker startup (via the host's package
+# manager, e.g. dnf/apt). Listed packages are installed before any project
+# is cloned so they're available at build/run time.
+dnf_packages = ["ffmpeg", "aria2"]
+
+# Default GitHub/GitLab access token used to clone projects whose
+# `repo = "private"`. Each project may override with its own `access_token`.
+# Leave empty ("") if you only deploy public repos.
+access_token = ""
+
+# Login credentials for the web dashboard (served by the Quart app).
+# If either is empty, the dashboard will refuse to log in.
+username = "admin"
+password = "change-me"
+
+# Enable the keep-alive ping service. When true, the ping worker waits for
+# the project manager to finish startup and then periodically pings the URL
+# below (or APP_URL / an auto-detected platform URL) to keep free-tier hosts
+# from sleeping. Set to false to disable the ping service entirely.
+ping = true
+
+# Explicit URL for the keep-alive pinger. Takes precedence over APP_URL and
+# any auto-detected platform URL. Leave empty to use auto-detection.
+ping_url = ""
+
+
+# -----------------------------------------------------------------------------
+# [upstream] — optional self-update mechanism.
+# -----------------------------------------------------------------------------
+# When `repo` is non-empty, `update.py` (run on container startup) will:
+#   1. Wipe the local .git directory
+#   2. git init, commit the current tree, then hard-reset to `branch` of `repo`
+# Use this to pin the running code to a remote without rebuilding the image.
+# Leave `repo` empty to disable self-updating entirely.
+[upstream]
+repo   = ""           # e.g. "https://github.com/youruser/yourfork"
+branch = "main"
+
+
+# =============================================================================
+# [[project]] entries — one per worker
+# =============================================================================
+# Required fields per project: id, git_url, branch, run_command
+# All other fields are optional and fall back to [defaults] where applicable.
+# -----------------------------------------------------------------------------
+
+# ── Example: public repo, minimal config ─────────────────────────────────────
+[[project]]
+# Unique id for this worker. Used to namespace s6 service names and log files.
+# Must be unique across all [[project]] entries.
+id          = "worker01"
+
+# HTTPS clone URL of the repository.
+git_url     = "https://github.com/example/public-bot"
+
+# Branch (or tag/commit) to check out after cloning.
+branch      = "main"
+
+# "public" (default) or "private". When "private", the access_token below —
+# or [defaults].access_token — is injected into the clone URL as
+# `x-access-token:<token>@` basic-auth credentials.
+repo        = "public"
+
+# Entry point inside the cloned repo. Either a module/file (e.g. "bot.py")
+# or a shell command. It is executed inside the project's venv.
+run_command = "bot.py"
+
+# Per-project log rotation threshold. Accepts byte counts ("1048576") or
+# suffixed values: K/KB, M/MB, G/GB. One archive is kept; older rotations
+# are deleted so disk usage is bounded. Default: "10M".
+logs_size   = "10M"
+
+# Environment variables exported into the worker process.
+# All values are coerced to strings.
+[project.env]
+LOG_LEVEL = "info"
+
+# Scheduling rules for this worker. All keys are optional.
+[project.cron]
+# Restart the worker every N hours. 0 or "" disables scheduled restarts.
+restart_on   = "0"
+# When restarting, also wipe & rebuild the venv (fresh `pip install`).
+redeploy     = "false"
+# Auto-start the worker after this many minutes of idle. 0 or "" disables.
+idle         = ""
+# `git pull` before each (re)start. Default: true.
+pull_commits = "true"
+
+
+# ── Example: private repo with per-project overrides ─────────────────────────
+[[project]]
+id             = "worker02"
+git_url        = "https://github.com/example/private-bot"
+branch         = "production"
+repo           = "private"
+
+# Optional per-project token. If omitted, [defaults].access_token is used.
+# access_token = "ghp_xxx"
+
+# Override the global python_version for just this project.
+python_version = "3.12"
+
+run_command    = "mybot"
+logs_size      = "50M"
+
+[project.env]
+BOT_TOKEN = "123456:ABC-DEF"
+DB_URL    = "postgres://user:pass@host/db"
+
+[project.cron]
+restart_on   = "6"      # restart every 6 hours
+redeploy     = "true"   # rebuild venv on each restart
+idle         = "10"     # auto-start 10 min after going idle
+pull_commits = "true"
