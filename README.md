@@ -9,7 +9,7 @@
 
 <div align="center">
 
-<a href="#">
+<a href="# ">
   <img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=700&size=42&duration=2800&pause=600&color=4F8CC9&center=true&vCenter=true&width=620&lines=Pypen;Run+multiple+Python+apps.;One+container.;Zero+drama." alt="Pypen typing banner" />
 </a>
 
