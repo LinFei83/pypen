@@ -21,7 +21,7 @@ ENV PATH="/command:${PATH}"
 COPY requirements.txt ./
 RUN pip3 install --no-cache-dir uv
 RUN uv pip install --system --no-cache -r requirements.txt
-RUN mkdir -p /etc/s6/services /var/log/s6
+RUN mkdir -p /etc/s6/services /var/log/s6 /app/projects
 
 COPY . .
 EXPOSE 5000

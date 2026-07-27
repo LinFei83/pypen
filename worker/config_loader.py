@@ -7,20 +7,20 @@ from typing import Any
 
 from app.utils.logging_config import logger
 
-from .naming import generate_prefix
+from .constants import PROJECTS_DIR
 
 if sys.version_info >= (3, 11):
     import tomllib
 else:
     import tomli as tomllib
 
-_REQUIRED_KEYS = ("id", "git_url", "branch", "run_command")
+_REQUIRED_KEYS = ("id", "run_command")
 
 _CRON_DEFAULTS: dict[str, Any] = {
     "restart_on": None,
     "redeploy": False,
     "idle": None,
-    "pull_commits": True,
+    "pull_commits": False,
 }
 
 _DEFAULT_LOGS_SIZE_BYTES: int = 10 * 1024 * 1024
@@ -35,6 +35,8 @@ _SIZE_SUFFIXES: dict[str, int] = {
     "G": 1024 * 1024 * 1024,
     "GB": 1024 * 1024 * 1024,
 }
+
+_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
 def _coerce_bool(value: Any) -> bool:
     if isinstance(value, bool):
@@ -111,20 +113,13 @@ def _normalize_cron(raw: dict[str, Any] | None) -> dict[str, Any]:
         "restart_on": _coerce_optional_int(raw.get("restart_on")),
         "redeploy": _coerce_bool(raw.get("redeploy", False)),
         "idle": _coerce_optional_int(raw.get("idle")),
-        "pull_commits": _coerce_bool(raw.get("pull_commits", True)),
+        "pull_commits": _coerce_bool(raw.get("pull_commits", False)),
     }
-
-def _normalize_repo_kind(raw: Any) -> str:
-    if raw is None:
-        return "public"
-    text = str(raw).strip().lower()
-    if text in ("private", "priv"):
-        return "private"
-    return "public"
 
 _TOKEN_URL_RE = re.compile(r"^(https?://)(?:[^@/]+@)?(.+)$", re.IGNORECASE)
 
 def inject_access_token(git_url: str, token: str | None) -> str:
+    """保留供本地 git remote 鉴权等场景复用；主启动路径不再使用。"""
     if not token:
         return git_url
     url = (git_url or "").strip()
@@ -132,8 +127,14 @@ def inject_access_token(git_url: str, token: str | None) -> str:
     if not match:
         return url
     scheme, rest = match.groups()
-
     return f"{scheme}x-access-token:{token}@{rest}"
+
+def _is_valid_project_id(project_id: str) -> bool:
+    if not project_id or project_id.startswith("."):
+        return False
+    if "/" in project_id or "\\" in project_id:
+        return False
+    return bool(_ID_RE.fullmatch(project_id))
 
 def validate_config(projects: list[dict[str, Any]]) -> bool:
     seen_ids: set[str] = set()
@@ -142,15 +143,26 @@ def validate_config(projects: list[dict[str, Any]]) -> bool:
         missing = [k for k in _REQUIRED_KEYS if not project.get(k)]
         if missing:
             logger.error(
-                f"Missing required fields {missing} in project: {project.get('_raw_id', '<unnamed>')}"
+                f"Missing required fields {missing} in project: "
+                f"{project.get('_raw_id', '<unnamed>')}"
             )
             return False
 
-        if not str(project["git_url"]).startswith("http"):
-            logger.error(f"Invalid git_url for project {project['_raw_id']}.")
+        raw_id = project["_raw_id"]
+        if not _is_valid_project_id(raw_id):
+            logger.error(
+                f"Invalid project id {raw_id!r}: must match "
+                f"{_ID_RE.pattern} and not contain path separators"
+            )
             return False
 
-        raw_id = project["_raw_id"]
+        project_dir = PROJECTS_DIR / raw_id
+        if not project_dir.is_dir():
+            logger.error(
+                f"Project directory missing for id={raw_id}: expected {project_dir}"
+            )
+            return False
+
         if raw_id in seen_ids:
             logger.error(f"Duplicate project id: {raw_id}")
             return False
@@ -174,10 +186,6 @@ def load_config(file_path: str) -> list[dict[str, Any]]:
         logger.error(f"Error parsing TOML file: {e}")
         return []
 
-    defaults = raw.get("defaults", {}) or {}
-    default_python = defaults.get("python_version") or None
-    default_token = (defaults.get("access_token") or "").strip() or None
-
     projects_raw = raw.get("project", []) or []
     if not isinstance(projects_raw, list):
         logger.error("[[project]] must be an array of tables.")
@@ -190,23 +198,27 @@ def load_config(file_path: str) -> list[dict[str, Any]]:
             logger.warning("Skipping project with empty id.")
             continue
 
-        prefix = generate_prefix().replace(" ", "_")
-        namespaced_id = f"{prefix}_{raw_id}"
-
-        project_python = entry.get("python_version") or None
-        python_version = project_python or default_python
-
-        repo_kind = _normalize_repo_kind(entry.get("repo"))
-        project_token = (str(entry.get("access_token") or "")).strip() or None
-        access_token = project_token or default_token if repo_kind == "private" else None
-        if repo_kind == "private" and not access_token:
-            logger.warning(
-                f"Project {raw_id} is marked repo=\"private\" but no "
-                f"access_token is set (project or [defaults]). Clones may fail."
+        if not _is_valid_project_id(raw_id):
+            logger.error(
+                f"Skipping project with invalid id {raw_id!r} "
+                f"(must be a safe folder name under {PROJECTS_DIR})"
             )
+            continue
 
-        git_url = str(entry.get("git_url", "")).strip()
-        clone_url = inject_access_token(git_url, access_token)
+        run_command = str(entry.get("run_command", "")).strip()
+        if not run_command:
+            logger.error(f"Skipping project {raw_id}: run_command is required")
+            continue
+        if "\n" in run_command or "\r" in run_command:
+            logger.error(f"Skipping project {raw_id}: run_command must be a single line")
+            continue
+
+        project_dir = PROJECTS_DIR / raw_id
+        if not project_dir.is_dir():
+            logger.error(
+                f"Skipping project {raw_id}: directory not found at {project_dir}"
+            )
+            continue
 
         env = entry.get("env") or {}
         if not isinstance(env, dict):
@@ -215,26 +227,18 @@ def load_config(file_path: str) -> list[dict[str, Any]]:
 
         projects.append(
             {
-
-                "id": namespaced_id,
-                "project_number": namespaced_id,
-                "name": namespaced_id,
+                "id": raw_id,
+                "project_number": raw_id,
+                "name": raw_id,
                 "_raw_id": raw_id,
-                "git_url": git_url,
-
-                "clone_url": clone_url,
-                "repo": repo_kind,
-                "access_token": access_token,
-                "branch": str(entry.get("branch", "main")).strip() or "main",
-                "run_command": str(entry.get("run_command", "")).strip(),
-                "python_version": python_version,
+                "run_command": run_command,
                 "env": {str(k): str(v) for k, v in env.items()},
                 "cron": _normalize_cron(entry.get("cron")),
                 "logs_size": _coerce_size_bytes(entry.get("logs_size")),
             }
         )
 
-    if not validate_config(projects):
+    if projects and not validate_config(projects):
         raise ValueError("Invalid configuration file.")
 
     return projects

@@ -6,12 +6,9 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from git import Repo
-
 from app.utils.logging_config import logger
 
-from .constants import APP_DIR, S6_SERVICE_DIR
-from .pyenv_utils import get_pyenv_python, run_with_pyenv
+from .constants import PROJECTS_DIR, S6_SERVICE_DIR
 from .s6_config import remove_service, write_service
 from .s6_svc import (
     async_s6_svc,
@@ -20,7 +17,7 @@ from .s6_svc import (
 )
 
 def _project_dir(cluster: dict[str, Any]) -> Path:
-    return APP_DIR / cluster["project_number"].replace(" ", "_")
+    return PROJECTS_DIR / cluster["project_number"].replace(" ", "_")
 
 def install_system_packages(packages: list[str]) -> None:
     if not packages:
@@ -64,73 +61,23 @@ def install_system_packages(packages: list[str]) -> None:
             f"projects depending on these packages may fail to start"
         )
 
-def _prepare_project_dir(cluster: dict[str, Any]) -> None:
-    project_dir = _project_dir(cluster)
-    venv_dir = project_dir / "venv"
-    requirements_file = project_dir / "requirements.txt"
-    branch = cluster.get("branch", "main")
-
-    if project_dir.exists():
-        logger.info(f"Removing existing directory: {project_dir}")
-        shutil.rmtree(project_dir)
-
-    logger.info(
-        f"Cloning {cluster['project_number']} from {cluster['git_url']} (branch: {branch})"
-    )
-
-    clone_target = cluster.get("clone_url") or cluster["git_url"]
-    Repo.clone_from(clone_target, str(project_dir), branch=branch, single_branch=True)
-
-    version = cluster.get("python_version")
-    python_executable = (
-        get_pyenv_python(version) if version else (shutil.which("python3") or "python3")
-    )
-
-    if not requirements_file.exists():
-        return
-
-    logger.info(
-        f"Creating virtual environment for {cluster['project_number']} using {python_executable} (via uv)"
-    )
-    venv_cmd = ["uv", "venv", str(venv_dir), "--python", python_executable]
-    pip_cmd = [
-        "uv",
-        "pip",
-        "install",
-        "--no-cache",
-        "--python",
-        str(venv_dir / "bin" / "python"),
-        "-r",
-        str(requirements_file),
-    ]
-
-    if version:
-        run_with_pyenv(version, venv_cmd, check=True)
-        run_with_pyenv(version, pip_cmd, check=True)
-    else:
-        subprocess.run(venv_cmd, check=True)
-        subprocess.run(pip_cmd, check=True)
-
 async def start_project(cluster: dict[str, Any]) -> None:
     logger.info(f"Starting project: {cluster['project_number']}")
 
     project_dir = _project_dir(cluster)
-    venv_dir = project_dir / "venv"
-    project_file = project_dir / cluster["run_command"]
+    if not project_dir.is_dir():
+        logger.error(
+            f"Skipping {cluster['project_number']}: project directory missing "
+            f"at {project_dir}"
+        )
+        return
 
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, _prepare_project_dir, cluster)
-
-    python_executable = venv_dir / "bin" / "python3"
-    if cluster.get("python_version"):
-        python_executable = venv_dir / "bin" / f"python{cluster['python_version']}"
-
-    if project_file.suffix == ".sh":
-        command = f"bash {project_file}"
-    elif project_file.suffix == ".py":
-        command = f"{python_executable} {project_file}"
-    else:
-        command = f"{python_executable} -m {project_file.stem}"
+    command = str(cluster.get("run_command") or "").strip()
+    if not command:
+        logger.error(
+            f"Skipping {cluster['project_number']}: empty run_command"
+        )
+        return
 
     write_service(cluster, command)
 

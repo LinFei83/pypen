@@ -1,5 +1,4 @@
 import os
-import shutil
 import subprocess
 import re
 import sys
@@ -26,6 +25,8 @@ from quart import (
     redirect, url_for, session, flash, Response,
 )
 from werkzeug.exceptions import HTTPException
+
+from worker.constants import PROJECTS_DIR
 
 S6_LOG_DIR = "/var/log/s6"
 S6_SERVICE_DIR = "/etc/s6/services"
@@ -83,6 +84,9 @@ def _cpu_history_for(process_name: str) -> list[float]:
 
 def _slug(process_name: str) -> str:
     return process_name.replace(" ", "_")
+
+def _project_workdir(process_name: str) -> Path:
+    return PROJECTS_DIR / _slug(process_name)
 
 def _svc_path(process_name: str) -> Path:
     return Path(S6_SERVICE_DIR) / _slug(process_name)
@@ -226,7 +230,7 @@ def _collect_processes() -> list[dict]:
         s6_rescan()
 
     for raw_id in _configured_project_ids():
-        if any(svc.endswith("_" + raw_id) or svc == raw_id for svc in services):
+        if raw_id in services:
             continue
         processes.append(_placeholder_for(raw_id))
 
@@ -254,7 +258,7 @@ def is_process_paused(pid) -> bool:
 def pause_process(process_name: str) -> dict:
     result = s6_svc("-p", process_name)
 
-    workdir = Path("/app") / _slug(process_name)
+    workdir = _project_workdir(process_name)
     try:
         subprocess.run(
             ["pkill", "-STOP", "-f", str(workdir)],
@@ -271,7 +275,7 @@ def pause_process(process_name: str) -> dict:
 
 def resume_process(process_name: str) -> dict:
     result = s6_svc("-c", process_name)
-    workdir = Path("/app") / _slug(process_name)
+    workdir = _project_workdir(process_name)
     try:
         subprocess.run(
             ["pkill", "-CONT", "-f", str(workdir)],
@@ -313,7 +317,7 @@ def _pull_commits_enabled(process_name: str) -> bool:
     return _truthy(cron.get("pull_commits"))
 
 def update_process_code(process_name: str) -> None:
-    workdir = Path("/app") / _slug(process_name)
+    workdir = _project_workdir(process_name)
     if not workdir.exists():
         logger.warning(f"git pull skipped for {process_name}: no working directory")
         return
@@ -324,6 +328,16 @@ def update_process_code(process_name: str) -> None:
         )
         return
 
+    try:
+        _git_pull_workdir(process_name, workdir)
+    except Exception as exc:
+        logger.error(f"git pull during start/restart failed for {process_name}: {exc}")
+
+def _git_pull_workdir(process_name: str, workdir: Path) -> None:
+    """在项目目录执行 git pull --ff-only；失败时抛出异常。"""
+    if not (workdir / ".git").exists():
+        raise RuntimeError(f"{process_name} 不是 git 仓库，无法同步代码")
+
     logger.info(f"git pull starting for {process_name} in {workdir}")
     try:
         result = subprocess.run(
@@ -333,26 +347,25 @@ def update_process_code(process_name: str) -> None:
             text=True,
             timeout=120,
         )
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
         logger.error(f"git pull timed out for {process_name}")
-        return
+        raise RuntimeError(f"git pull 超时：{process_name}") from exc
     except Exception as e:
         logger.error(f"git pull failed for {process_name}: {e}")
-        return
+        raise
 
     for line in (result.stdout or "").splitlines():
         logger.info(f"[git pull {process_name}] {line}")
     for line in (result.stderr or "").splitlines():
-
         log_fn = logger.info if result.returncode == 0 else logger.error
         log_fn(f"[git pull {process_name}] {line}")
 
     if result.returncode == 0:
         logger.info(f"git pull finished for {process_name}")
-    else:
-        logger.error(
-            f"git pull for {process_name} exited {result.returncode}"
-        )
+        return
+
+    detail = (result.stderr or result.stdout or "").strip() or f"exit {result.returncode}"
+    raise RuntimeError(f"git pull 失败（{process_name}）：{detail}")
 
 users = {
     "admin": "password123",
@@ -667,8 +680,7 @@ def delete_service_logs(process_name: str) -> None:
                 )
 
 def _kill_orphans(process_name: str) -> None:
-    slug = _slug(process_name)
-    workdir = Path("/app") / slug
+    workdir = _project_workdir(process_name)
     patterns = [str(workdir)]
 
     for pat in patterns:
@@ -685,7 +697,7 @@ def _kill_orphans(process_name: str) -> None:
 
 def thoroughly_cleanup(process_name: str) -> None:
     _kill_orphans(process_name)
-    workdir = Path("/app") / _slug(process_name)
+    workdir = _project_workdir(process_name)
     if workdir.exists():
         for root, dirs, files in os.walk(workdir):
             for d in dirs:
@@ -719,93 +731,32 @@ def _find_project_config(process_name: str) -> dict | None:
     except (FileNotFoundError, tomllib.TOMLDecodeError):
         return None
     projects = raw.get("project") or []
-    defaults = raw.get("defaults") or {}
     if not isinstance(projects, list):
         return None
-    default_token = (str(defaults.get("access_token") or "")).strip() or None
     for entry in projects:
         if not isinstance(entry, dict):
             continue
         raw_id = str(entry.get("id", "")).strip()
         if not raw_id:
             continue
-        if process_name == raw_id or process_name.endswith("_" + raw_id):
+        if process_name == raw_id:
             merged = dict(entry)
-            merged.setdefault("python_version",
-                              entry.get("python_version") or defaults.get("python_version"))
             merged["_raw_id"] = raw_id
-
-            repo_raw = str(entry.get("repo") or "").strip().lower()
-            repo_kind = "private" if repo_raw in ("private", "priv") else "public"
-            project_token = (str(entry.get("access_token") or "")).strip() or None
-            access_token = (
-                project_token or default_token if repo_kind == "private" else None
-            )
-            merged["repo"] = repo_kind
-            merged["access_token"] = access_token
-            if repo_kind == "private" and not access_token:
-                logger.warning(
-                    f"Project {raw_id} is repo=\"private\" but has no access_token; "
-                    f"redeploy clone will probably fail."
-                )
             return merged
     return None
 
-def _redeploy_blocking(process_name: str, project: dict) -> None:
-    from git import Repo
-
-    workdir = Path("/app") / _slug(process_name)
-    if workdir.exists():
-        logger.info(f"Redeploy: removing {workdir}")
-        shutil.rmtree(workdir, ignore_errors=True)
-
-    git_url = str(project.get("git_url", "")).strip()
-    branch = str(project.get("branch", "main")).strip() or "main"
-
-    try:
-        from worker.config_loader import inject_access_token
-        clone_url = inject_access_token(git_url, project.get("access_token"))
-    except Exception:
-        clone_url = git_url
-
-    logger.info(f"Redeploy: cloning {git_url} (branch {branch}) into {workdir}")
-    Repo.clone_from(clone_url, str(workdir), branch=branch, single_branch=True)
-
-    requirements_file = workdir / "requirements.txt"
-    venv_dir = workdir / "venv"
-    python_version = project.get("python_version")
-
-    python_executable = shutil.which("python3") or "python3"
-    try:
-        from worker.pyenv_utils import get_pyenv_python, run_with_pyenv
-        if python_version:
-            python_executable = get_pyenv_python(python_version)
-    except Exception:
-        get_pyenv_python = None
-        run_with_pyenv = None
-
-    if not requirements_file.exists():
-        logger.info("Redeploy: no requirements.txt, skipping venv build")
-        return
-
-    venv_cmd = ["uv", "venv", str(venv_dir), "--python", str(python_executable)]
-    pip_cmd = [
-        "uv", "pip", "install", "--no-cache",
-        "--python", str(venv_dir / "bin" / "python"),
-        "-r", str(requirements_file),
-    ]
-    logger.info(f"Redeploy: creating venv {venv_dir}")
-    if python_version and run_with_pyenv is not None:
-        run_with_pyenv(python_version, venv_cmd, check=True)
-        run_with_pyenv(python_version, pip_cmd, check=True)
-    else:
-        subprocess.run(venv_cmd, check=True)
-        subprocess.run(pip_cmd, check=True)
+def _redeploy_blocking(process_name: str, project: dict | None = None) -> None:
+    """本地模式：仅在项目目录 git pull，不删目录、不重新 clone、不重建 venv。"""
+    del project  # 保留签名以兼容 cron 调用
+    workdir = _project_workdir(process_name)
+    if not workdir.is_dir():
+        raise RuntimeError(f"项目目录不存在：{workdir}")
+    _git_pull_workdir(process_name, workdir)
 
 @app.route('/service/redeploy/<process_name>', methods=['POST'])
 @login_required
 async def redeploy_service(process_name):
-    logger.info(f"Received redeploy request for process: {process_name}")
+    logger.info(f"Received sync-code request for process: {process_name}")
     if not _VALID_NAME_RE.match(process_name):
         return jsonify({"status": "error", "message": "无效的进程名称"}), 400
 
@@ -821,7 +772,6 @@ async def redeploy_service(process_name):
         }), 404
 
     try:
-
         _run_cmd(
             ["s6-svc", "-wD", "-d", str(_svc_path(process_name))],
             timeout=15,
@@ -845,14 +795,14 @@ async def redeploy_service(process_name):
             await broadcast_status_update()
             return jsonify({
                 "status": "success",
-                "message": f"已重新部署 {process_name}",
+                "message": f"已重新同步代码并启动 {process_name}",
             }), 200
         return jsonify({
             "status": "error",
-            "message": "重新部署后服务未进入运行状态",
+            "message": "同步代码后服务未进入运行状态",
         }), 500
     except Exception as e:
-        logger.exception(f"Redeploy failed for {process_name}: {e}")
+        logger.exception(f"Sync code failed for {process_name}: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/service/stream-view/<process_name>')

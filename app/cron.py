@@ -58,7 +58,7 @@ def _resolve_service_name(raw_id: str) -> str | None:
     from app.routes.routes import list_services
 
     for svc in list_services():
-        if svc == raw_id or svc.endswith("_" + raw_id):
+        if svc == raw_id:
             return svc
     return None
 
@@ -169,7 +169,7 @@ async def _scheduled_restart_loop(
             )
             continue
 
-        action = "redeploy" if redeploy_on_restart else "restart"
+        action = "sync-code" if redeploy_on_restart else "restart"
         logger.info(f"cron: scheduled {action} firing for {service}")
         try:
             if redeploy_on_restart:

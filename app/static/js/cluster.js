@@ -254,13 +254,13 @@ function buildCard(tpl, process) {
     const midRow = document.createElement('div');
     midRow.className = 'ctrl-row';
     controls.appendChild(midRow);
-    appendButton(midRow, '重新部署', '', ICONS.redeploy,
+    appendButton(midRow, '重新同步代码', '', ICONS.redeploy,
         () => showConfirm({
-            title: `重新部署 ${name}？`,
-            message: '此操作将停止服务，清空工作目录与虚拟环境缓存，'
-                + '拉取最新提交，从头安装依赖，然后重新启动服务。\n\n'
-                + '此操作不可撤销。',
-            okLabel: '重新部署',
+            title: `重新同步代码 ${name}？`,
+            message: '此操作将停止服务，在项目目录执行 git pull --ff-only，'
+                + '然后重新启动服务。\n\n'
+                + '不会清空本地目录，也不会重建虚拟环境。',
+            okLabel: '重新同步代码',
             variant: 'danger',
             icon: '⟳',
             onConfirm: () => redeploy(name),
@@ -453,10 +453,10 @@ function redeploy(processName) {
             if (data.status === 'success') {
                 setTimeout(requestStatus, 1500);
             } else {
-                alert(`重新部署失败：${data.message || '未知错误'}`);
+                alert(`重新同步代码失败：${data.message || '未知错误'}`);
             }
         })
-        .catch(() => alert('无法重新部署该进程。'));
+        .catch(() => alert('无法重新同步该进程的代码。'));
 }
 
 function streamLogs(processName) {

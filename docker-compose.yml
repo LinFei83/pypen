@@ -53,6 +53,8 @@ services:
     volumes:
       # 业务配置（已在 .gitignore，勿提交密钥）
       - ./project.toml:/app/project.toml:ro
+      # 本地项目目录：宿主机 ./projects/<id> → 容器 /app/projects/<id>
+      - ./projects:/app/projects
       # worker 日志持久化
       - pypen-logs:/var/log/s6
     # 健康检查：仪表盘端口已监听即可（不依赖登录页 HTTP 状态）

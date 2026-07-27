@@ -6,7 +6,7 @@ from typing import Any
 
 from app.utils.logging_config import logger
 
-from .constants import S6_LOG_DIR, S6_SERVICE_DIR
+from .constants import PROJECTS_DIR, S6_LOG_DIR, S6_SERVICE_DIR
 
 _RUN_TEMPLATE = """\
 #!/bin/sh
@@ -56,7 +56,7 @@ def _format_exports(env: dict[str, str] | None) -> str:
 def write_service(cluster: dict[str, Any], command: str) -> None:
     slug = cluster["project_number"].replace(" ", "_")
     service_dir = S6_SERVICE_DIR / slug
-    workdir = f"/app/{slug}"
+    workdir = str(PROJECTS_DIR / slug)
     log_dir = S6_LOG_DIR / slug
     size_bytes = int(cluster.get("logs_size") or 10 * 1024 * 1024)
 

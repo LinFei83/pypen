@@ -1,138 +1,106 @@
 # =============================================================================
-# project.toml — 示例 / 带注释的配置文件
+# project.toml — 本地模式示例 / 带注释的配置文件
 # =============================================================================
 # 将本文件复制为 `project.toml`，再按实际部署环境修改。
 #
-# 文件结构：
-#   [defaults]   — 所有 [[project]] 共用的全局默认值
-#   [upstream]   — 可选：启动时从远程 git 仓库自动更新
-#   [[project]]  — 每个 worker 一条（数量不限）
-#     [project.env]   — 传给该 worker 的环境变量
-#     [project.cron]  — 该 worker 的重启 / 空闲 / git-pull 调度
+# 本地工作流：
+#   1. 在仓库一级目录手动放置项目：projects/<id>/
+#      （git clone、创建 venv、配置 .env 等均在宿主机完成）
+#   2. 下方 [[project]] 的 id 必须与文件夹名一致
+#   3. 填写 run_command（相对 projects/<id>/ 执行）
+#   4. 启动容器后，Pypen 只注册 s6 服务并在网页仪表盘展示状态
 #
-# TOML 作用域说明：
-#   `[project.env]` 与 `[project.cron]` 属于最近一条 `[[project]]`
-#   数组项的子表。请始终写在所属 `[[project]]` 表的正下方。
+# 文件结构：
+#   [defaults]   — 全局默认值
+#   [upstream]   — 可选：启动时从远程 git 仓库自动更新 Pypen 自身
+#   [[project]]  — 每个 worker 一条（数量不限）
+#     [project.env]   — 由 Pypen/s6 注入进程环境的变量
+#     [project.cron]  — 该 worker 的重启 / 空闲 / git-pull 调度
 # =============================================================================
 
 
 # -----------------------------------------------------------------------------
-# [defaults] — 应用于每个 [[project]]，除非该项目自行覆盖。
+# [defaults]
 # -----------------------------------------------------------------------------
 [defaults]
-# 用于构建各项目独立 venv 的 Python 版本（通过 pyenv）。
-# 项目可用自己的 `python_version` 字段覆盖。
-python_version = "3.11"
-
 # 在 worker 启动时安装一次的系统包（通过主机包管理器，如 dnf/apt）。
-# 所列软件包会在克隆任何项目之前安装，以便构建/运行时可用。
 dnf_packages = ["ffmpeg", "aria2"]
 
-# 克隆 `repo = "private"` 项目时使用的默认 GitHub/GitLab 访问令牌。
-# 每个项目可用自己的 `access_token` 覆盖。
-# 若只部署公开仓库，可留空 ("")。
-access_token = ""
-
-# Web 仪表盘登录凭据（由 Quart 应用提供）。
-# 任一为空时，仪表盘将拒绝登录。
+# Web 仪表盘登录凭据。任一为空时，仪表盘将拒绝登录。
 username = "admin"
 password = "change-me"
 
-# 是否启用保活 ping 服务。为 true 时，ping worker 会等待项目管理器
-# 完成启动，然后周期性请求下方 URL（或 APP_URL / 自动检测的平台 URL），
-# 以避免免费层主机休眠。设为 false 可完全关闭 ping 服务。
+# 是否启用保活 ping 服务。
 ping = true
-
-# 保活 ping 的显式 URL。优先于 APP_URL 与任何自动检测的平台 URL。
-# 留空则使用自动检测。
 ping_url = ""
 
 
 # -----------------------------------------------------------------------------
-# [upstream] — 可选的自更新机制。
+# [upstream] — 可选的自更新机制（针对 Pypen 自身代码，与 projects/ 无关）。
 # -----------------------------------------------------------------------------
-# 当 `repo` 非空时，`update.py`（容器启动时运行）会：
-#   1. 清空本地 .git 目录
-#   2. git init，提交当前树，再硬重置到 `repo` 的 `branch`
-# 用于在不重建镜像的情况下，将运行代码固定到远程仓库。
-# 将 `repo` 留空可完全禁用自更新。
 [upstream]
 repo   = ""           # 例如 "https://github.com/youruser/yourfork"
 branch = "main"
 
 
 # =============================================================================
-# [[project]] 条目 — 每个 worker 一条
+# [[project]] — 必填：id、run_command
+# id 必须等于 projects/<id>/ 的文件夹名，并作为 s6 服务名。
 # =============================================================================
-# 每个项目必填字段：id、git_url、branch、run_command
-# 其余字段可选，适用时回退到 [defaults]。
-# -----------------------------------------------------------------------------
 
-# ── 示例：公开仓库，最小配置 ─────────────────────────────────────────────────
+# ── 最小示例 ─────────────────────────────────────────────────────────────────
 [[project]]
-# 该 worker 的唯一 id。用于命名 s6 服务名与日志文件。
-# 在所有 [[project]] 条目中必须唯一。
-id          = "worker01"
+# 对应目录：projects/mybot/
+id          = "mybot"
 
-# 仓库的 HTTPS 克隆地址。
-git_url     = "https://github.com/example/public-bot"
+# 在 projects/mybot/ 下执行的命令（原样写入 s6，请自行写好解释器路径）。
+# 例如：venv/bin/python bot.py   或   bash start.sh
+run_command = "venv/bin/python bot.py"
 
-# 克隆后要检出的分支（或标签/提交）。
-branch      = "main"
-
-# "public"（默认）或 "private"。为 "private" 时，下方的 access_token —
-# 或 [defaults].access_token — 会以 `x-access-token:<token>@`
-# 基本认证形式注入到克隆 URL。
-repo        = "public"
-
-# 克隆仓库内的入口。可以是模块/文件（如 "bot.py"），
-# 也可以是 shell 命令。在项目的 venv 内执行。
-run_command = "bot.py"
-
-# 按项目的日志轮转阈值。接受字节数（"1048576"）或带后缀的值：
-# K/KB、M/MB、G/GB。只保留一份归档；更早的轮转会被删除，
-# 以限制磁盘占用。默认："10M"。
+# 按项目的日志轮转阈值。默认："10M"。
 logs_size   = "10M"
 
-# 导出到 worker 进程的环境变量。
-# 所有值都会强制转为字符串。
+# ---------------------------------------------------------------------------
+# 环境变量分工（两者都可用，互不替代）：
+#
+#   [project.env]（下方）
+#     由 Pypen 写入 s6 run 脚本的 export，进程启动即带上。
+#     适合平台侧注入密钥、不想改仓库内文件的场景。
+#
+#   projects/<id>/.env
+#     由应用自己加载（如 python-dotenv）。Pypen 不会自动 source。
+#     适合仓库/应用本来就读 .env 的惯例；宿主机手动配环境时最自然。
+#
+# 可同时存在；同名键谁覆盖取决于应用 dotenv 的实现。
+# ---------------------------------------------------------------------------
 [project.env]
 LOG_LEVEL = "info"
+# BOT_TOKEN = "123456:ABC-DEF"
 
-# 该 worker 的调度规则。所有键均为可选。
 [project.cron]
-# 每隔 N 小时重启 worker。0 或 "" 表示禁用定时重启。
+# 每隔 N 小时重启。0 或 "" 表示禁用。
 restart_on   = "0"
-# 重启时是否同时清空并重建 venv（重新执行 `pip install`）。
+# 定时触发时是否「同步代码 + 重启」（git pull --ff-only）。
+# 旧语义「重建 venv」已废弃；网页「重新同步代码」按钮始终可主动 pull，不依赖本项。
 redeploy     = "false"
-# 空闲达到该分钟数后自动启动 worker。0 或 "" 表示禁用。
+# 空闲达到该分钟数后自动启动。0 或 "" 表示禁用。
 idle         = ""
-# 每次（重新）启动前执行 `git pull`。默认：true。
-pull_commits = "true"
+# 每次（重新）启动前是否自动 git pull。默认 false。
+# 与网页按钮无关：按钮始终允许主动同步。
+pull_commits = "false"
 
 
-# ── 示例：私有仓库，带按项目覆盖项 ───────────────────────────────────────────
+# ── 第二个项目示例 ───────────────────────────────────────────────────────────
 [[project]]
-id             = "worker02"
-git_url        = "https://github.com/example/private-bot"
-branch         = "production"
-repo           = "private"
-
-# 可选的按项目令牌。省略时使用 [defaults].access_token。
-# access_token = "ghp_xxx"
-
-# 仅覆盖本项目的全局 python_version。
-python_version = "3.12"
-
-run_command    = "mybot"
-logs_size      = "50M"
+id          = "worker02"
+run_command = "venv/bin/python -m mybot"
+logs_size   = "50M"
 
 [project.env]
-BOT_TOKEN = "123456:ABC-DEF"
-DB_URL    = "postgres://user:pass@host/db"
+DB_URL = "postgres://user:pass@host/db"
 
 [project.cron]
-restart_on   = "6"      # 每 6 小时重启一次
-redeploy     = "true"   # 每次重启时重建 venv
-idle         = "10"     # 空闲 10 分钟后自动启动
-pull_commits = "true"
+restart_on   = "6"
+redeploy     = "true"    # 每 6 小时：git pull + 重启
+idle         = "10"
+pull_commits = "false"

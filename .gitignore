@@ -10,3 +10,6 @@ sys/
 dev/
 usr/
 project.toml
+# 本地项目目录（保留占位文件）
+projects/*
+!projects/.gitkeep
