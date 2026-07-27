@@ -36,6 +36,8 @@ services:
     restart: unless-stopped
     ports:
       - "23413:5000"
+      # 业务项目端口需自行映射（示例：omi_mini .env 中 PORT=21564）
+      - "21564:21564"
     # 让容器内能解析并访问宿主机上的代理端口
     extra_hosts:
       - "host.docker.internal:host-gateway"

@@ -23,6 +23,8 @@ _RUN_TEMPLATE = """\
 # bytes and keeps a single archived copy.
 exec 2>&1
 cd {workdir}
+# 清除仪表盘注入的 PORT，避免覆盖项目 .env / [project.env] 中的监听端口
+unset PORT
 {exports}exec {command}
 """
 

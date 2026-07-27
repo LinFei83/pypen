@@ -58,6 +58,10 @@ id          = "mybot"
 # 推荐：.venv/bin/python bot.py（宿主机 uv sync 后，compose 已挂载 uv 解释器/缓存，容器可直接复用）
 # 若用 uv run，务必加 --no-sync，例如：uv run --no-sync python bot.py
 # 不要单独写 uv run ...（默认会 sync，可能再次装依赖）
+#
+# 注意：容器会为仪表盘设置 PORT=5000。s6 启动项目前会 unset PORT，
+# 以便应用读取自己的 .env；也可在 [project.env] 里显式写 PORT。
+# 若要从宿主机访问项目服务，请在 docker-compose.yml 的 ports 中映射对应端口。
 run_command = ".venv/bin/python bot.py"
 
 # 按项目的日志轮转阈值。默认："10M"。
