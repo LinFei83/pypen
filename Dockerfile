@@ -11,11 +11,18 @@ ARG NO_PROXY
 WORKDIR /app
 ARG S6_OVERLAY_VERSION=3.2.0.2
 ARG S6_OVERLAY_ARCH=x86_64
-ADD https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-noarch.tar.xz /tmp/
-ADD https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-${S6_OVERLAY_ARCH}.tar.xz /tmp/
-RUN tar -C / -Jxpf /tmp/s6-overlay-noarch.tar.xz \
-    && tar -C / -Jxpf /tmp/s6-overlay-${S6_OVERLAY_ARCH}.tar.xz \
-    && rm -f /tmp/s6-overlay-*.tar.xz
+# 用 curl 下载（会读取上方 HTTP(S)_PROXY 构建参数）；ADD 远程 URL 往往不走代理
+RUN set -eux; \
+    base="https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}"; \
+    curl -fsSL --retry 5 --retry-all-errors --connect-timeout 30 \
+      -o /tmp/s6-overlay-noarch.tar.xz \
+      "${base}/s6-overlay-noarch.tar.xz"; \
+    curl -fsSL --retry 5 --retry-all-errors --connect-timeout 30 \
+      -o /tmp/s6-overlay-${S6_OVERLAY_ARCH}.tar.xz \
+      "${base}/s6-overlay-${S6_OVERLAY_ARCH}.tar.xz"; \
+    tar -C / -Jxpf /tmp/s6-overlay-noarch.tar.xz; \
+    tar -C / -Jxpf /tmp/s6-overlay-${S6_OVERLAY_ARCH}.tar.xz; \
+    rm -f /tmp/s6-overlay-*.tar.xz
 ENV PATH="/command:${PATH}"
 
 COPY requirements.txt ./
