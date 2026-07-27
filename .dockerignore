@@ -1,0 +1,14 @@
+# 构建上下文排除：projects 由运行时 volume 挂载，无需打进镜像
+projects/
+
+# 本地配置与密钥
+project.toml
+.env
+.venv/
+
+# 杂项
+.git/
+__pycache__/
+*.pyc
+*.log
+.codesee/cache/
