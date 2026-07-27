@@ -1,5 +1,13 @@
 FROM mysterydemon/pypen:latest
 
+# 构建期代理（由 docker compose build.args / --build-arg 注入）
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG http_proxy
+ARG https_proxy
+ARG ALL_PROXY
+ARG NO_PROXY
+
 WORKDIR /app
 ARG S6_OVERLAY_VERSION=3.2.0.2
 ARG S6_OVERLAY_ARCH=x86_64

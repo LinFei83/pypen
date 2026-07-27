@@ -120,7 +120,7 @@
           "role": "side-effect",
           "refs": [
             { "file": "docker-compose.yml" },
-            { "file": "Dockerfile", "lines": [19, 20] },
+            { "file": "Dockerfile", "lines": [1, 28] },
             { "file": "heroku.yml" }
           ]
         },
@@ -165,7 +165,7 @@
       "confidence": 0.95,
       "provenance": "ai",
       "tags": ["sdd", "implemented"],
-      "updated_at": "2026-07-27T07:13:00Z"
+      "updated_at": "2026-07-27T07:30:00Z"
     },
     {
       "id": "f-load-project-config",

@@ -1,15 +1,29 @@
-# 本机 Docker 一键启动：docker compose up -d
+# 本机 Docker 一键启动：
+#   HTTP_PROXY=http://127.0.0.1:20172 HTTPS_PROXY=http://127.0.0.1:20172 docker compose up -d --build
 # 停止：docker compose down
 # 查看日志：docker compose logs -f
+#
+# 说明：即便用本地源码构建，Dockerfile 的 FROM 仍会拉取基础镜像 mysterydemon/pypen；
+# 构建阶段还会下载 s6-overlay。无法直连时请带上上方代理环境变量。
 
 services:
   pypen:
-    build: .
+    build:
+      context: .
+      # 构建容器使用宿主机网络，才能访问本机代理 127.0.0.1:20172
+      network: host
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-http://127.0.0.1:20172}
+        HTTPS_PROXY: ${HTTPS_PROXY:-http://127.0.0.1:20172}
+        http_proxy: ${HTTP_PROXY:-http://127.0.0.1:20172}
+        https_proxy: ${HTTPS_PROXY:-http://127.0.0.1:20172}
+        ALL_PROXY: ${ALL_PROXY:-http://127.0.0.1:20172}
+        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
     image: pypen:local
     container_name: pypen
     restart: unless-stopped
     ports:
-      - "5000:5000"
+      - "23413:5000"
     environment:
       PORT: "5000"
       # 本机一般不需要保活；若 project.toml 里 ping=true 且仍要 ping，可取消下行注释
