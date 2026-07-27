@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import os
 from pathlib import Path
 from typing import Any
@@ -45,11 +46,29 @@ def _load_document(path: Path) -> tomlkit.TOMLDocument:
         return tomlkit.document()
     return tomlkit.parse(text)
 
+def _write_text(path: Path, content: str) -> None:
+    """写入并 fsync，尽量保证内容落盘。"""
+    with path.open("w", encoding="utf-8") as fh:
+        fh.write(content)
+        fh.flush()
+        os.fsync(fh.fileno())
+
 def _atomic_write(path: Path, content: str) -> None:
+    """尽量原子写入；Docker 单文件 bind mount 上 replace 会 EBUSY，则回退原地写。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(content, encoding="utf-8")
-    os.replace(tmp, path)
+    _write_text(tmp, content)
+    try:
+        os.replace(tmp, path)
+    except OSError as exc:
+        if getattr(exc, "errno", None) != errno.EBUSY:
+            tmp.unlink(missing_ok=True)
+            raise
+        # 单文件挂载点不能替换 inode，改为覆盖目标文件内容
+        try:
+            _write_text(path, content)
+        finally:
+            tmp.unlink(missing_ok=True)
 
 def read_raw_projects(file_path: str | Path | None = None) -> list[dict[str, Any]]:
     """读取 toml 中已登记的 [[project]]（不做目录存在性过滤）。"""
