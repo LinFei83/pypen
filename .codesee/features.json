@@ -1,0 +1,993 @@
+{
+  "version": "0",
+  "manifest": {
+    "repo": "https://github.com/LinFei83/pypen.git",
+    "commit": "c1c3f5abdea67ee7e484070b1a4d48025424c7f2",
+    "generated_at": "2026-07-27T07:00:00Z",
+    "generator": "ai@cursor via SDD/spec-kit",
+    "lang": "zh-CN"
+  },
+  "epics": [
+    {
+      "id": "bootstrap",
+      "name": "容器启动",
+      "summary": "单容器内编排自更新、Web、监督器与各子进程",
+      "order": 0,
+      "importance": "core",
+      "tags": ["sdd"]
+    },
+    {
+      "id": "config",
+      "name": "配置加载",
+      "summary": "从 project.toml 解析 defaults、upstream 与各 worker 条目",
+      "order": 0,
+      "importance": "core",
+      "tags": ["sdd"]
+    },
+    {
+      "id": "worker",
+      "name": "工作进程",
+      "summary": "克隆仓库、构建 venv、注册 s6 并拉起各 Python 项目",
+      "order": 1,
+      "importance": "core",
+      "tags": ["sdd"]
+    },
+    {
+      "id": "dashboard",
+      "name": "Web 仪表盘",
+      "summary": "登录、进程观测、控制与实时日志",
+      "order": 2,
+      "importance": "core",
+      "tags": ["sdd"]
+    },
+    {
+      "id": "scheduler",
+      "name": "定时与自愈",
+      "summary": "按 cron 规则定时重启、重部署与空闲自动启动",
+      "order": 2,
+      "importance": "normal",
+      "tags": ["sdd"]
+    },
+    {
+      "id": "keepalive",
+      "name": "保活",
+      "summary": "周期性访问自身 URL，防止免费托管休眠",
+      "order": 3,
+      "importance": "auxiliary",
+      "tags": ["sdd"]
+    }
+  ],
+  "features": [
+    {
+      "id": "f-upstream-sync",
+      "name": "上游代码同步",
+      "summary": "启动时按 upstream 配置重置到远程分支",
+      "epicId": "bootstrap",
+      "triggers": [{ "kind": "startup", "detail": "容器启动时 update.py" }],
+      "steps": [
+        {
+          "id": "read-upstream",
+          "name": "读取上游配置",
+          "role": "data-read",
+          "refs": [{ "file": "update.py", "lines": [23, 36] }]
+        },
+        {
+          "id": "skip-empty",
+          "name": "跳过空配置",
+          "role": "validation",
+          "refs": [{ "file": "update.py", "lines": [38, 38] }]
+        },
+        {
+          "id": "reset-git",
+          "name": "重置到远程分支",
+          "role": "side-effect",
+          "refs": [{ "file": "update.py", "lines": [39, 54] }]
+        },
+        {
+          "id": "log-result",
+          "name": "记录同步结果",
+          "role": "output",
+          "refs": [{ "file": "update.py", "lines": [56, 59] }]
+        },
+        {
+          "id": "sync-fail",
+          "name": "报告同步失败",
+          "role": "error",
+          "refs": [{ "file": "update.py", "lines": [58, 59] }]
+        }
+      ],
+      "flow": [
+        { "from": "read-upstream", "to": "skip-empty", "kind": "next" },
+        { "from": "skip-empty", "to": "reset-git", "kind": "conditional", "condition": "repo 非空" },
+        { "from": "reset-git", "to": "log-result", "kind": "conditional", "condition": "git 成功" },
+        { "from": "reset-git", "to": "sync-fail", "kind": "conditional", "condition": "git 失败" }
+      ],
+      "confidence": 0.95,
+      "provenance": "ai",
+      "tags": ["sdd", "implemented"],
+      "updated_at": "2026-07-27T07:00:00Z"
+    },
+    {
+      "id": "f-orchestrate-start",
+      "name": "多进程编排启动",
+      "summary": "依次拉起 Web、s6、worker 与 ping 子进程",
+      "epicId": "bootstrap",
+      "triggers": [{ "kind": "startup", "detail": "python3 start.py / Docker CMD" }],
+      "steps": [
+        {
+          "id": "run-update",
+          "name": "执行自更新",
+          "role": "side-effect",
+          "refs": [{ "file": "start.py", "lines": [6, 29] }]
+        },
+        {
+          "id": "spawn-uvicorn",
+          "name": "启动 Web 服务",
+          "role": "side-effect",
+          "refs": [{ "file": "start.py", "lines": [9, 37] }]
+        },
+        {
+          "id": "spawn-s6",
+          "name": "启动 s6 监督",
+          "role": "side-effect",
+          "refs": [{ "file": "start.py", "lines": [16, 38] }]
+        },
+        {
+          "id": "spawn-worker",
+          "name": "启动项目管理器",
+          "role": "side-effect",
+          "refs": [{ "file": "start.py", "lines": [20, 39] }]
+        },
+        {
+          "id": "spawn-ping",
+          "name": "启动保活服务",
+          "role": "side-effect",
+          "refs": [{ "file": "start.py", "lines": [23, 40] }]
+        }
+      ],
+      "flow": [
+        { "from": "run-update", "to": "spawn-uvicorn", "kind": "next" },
+        { "from": "spawn-uvicorn", "to": "spawn-s6", "kind": "async" },
+        { "from": "spawn-s6", "to": "spawn-worker", "kind": "async" },
+        { "from": "spawn-worker", "to": "spawn-ping", "kind": "async" }
+      ],
+      "confidence": 0.95,
+      "provenance": "ai",
+      "tags": ["sdd", "implemented"],
+      "updated_at": "2026-07-27T07:00:00Z"
+    },
+    {
+      "id": "f-load-project-config",
+      "name": "解析项目配置",
+      "summary": "读取并校验 project.toml 各 worker 条目",
+      "epicId": "config",
+      "triggers": [{ "kind": "startup", "detail": "worker 与 cron 启动时加载" }],
+      "steps": [
+        {
+          "id": "parse-toml",
+          "name": "解析 TOML 文件",
+          "role": "data-read",
+          "refs": [{ "file": "worker/config_loader.py", "lines": [88, 97] }]
+        },
+        {
+          "id": "merge-defaults",
+          "name": "合并全局默认值",
+          "role": "transform",
+          "refs": [{ "file": "worker/config_loader.py", "lines": [162, 200] }]
+        },
+        {
+          "id": "inject-token",
+          "name": "注入克隆令牌",
+          "role": "transform",
+          "refs": [{ "file": "worker/config_loader.py", "lines": [127, 136] }]
+        },
+        {
+          "id": "validate",
+          "name": "校验必填字段",
+          "role": "validation",
+          "refs": [{ "file": "worker/config_loader.py", "lines": [138, 160] }]
+        },
+        {
+          "id": "parse-fail",
+          "name": "报告解析错误",
+          "role": "error",
+          "refs": [{ "file": "worker/config_loader.py", "lines": [95, 97] }]
+        }
+      ],
+      "flow": [
+        { "from": "parse-toml", "to": "merge-defaults", "kind": "next" },
+        { "from": "parse-toml", "to": "parse-fail", "kind": "error" },
+        { "from": "merge-defaults", "to": "inject-token", "kind": "next" },
+        { "from": "inject-token", "to": "validate", "kind": "next" }
+      ],
+      "confidence": 0.92,
+      "provenance": "ai",
+      "tags": ["sdd", "implemented"],
+      "updated_at": "2026-07-27T07:00:00Z"
+    },
+    {
+      "id": "f-worker-lifecycle",
+      "name": "项目管理器启动",
+      "summary": "清理旧服务、装系统包并启动全部 worker",
+      "epicId": "worker",
+      "triggers": [{ "kind": "cli", "detail": "python3 -m worker" }],
+      "steps": [
+        {
+          "id": "setup-log",
+          "name": "初始化日志",
+          "role": "other",
+          "refs": [{ "file": "worker/main.py", "lines": [51, 52] }]
+        },
+        {
+          "id": "load-clusters",
+          "name": "加载项目列表",
+          "role": "data-read",
+          "refs": [{ "file": "worker/main.py", "lines": [54, 54] }]
+        },
+        {
+          "id": "cleanup-old",
+          "name": "清理旧 s6 服务",
+          "role": "side-effect",
+          "refs": [{ "file": "worker/main.py", "lines": [23, 23] }]
+        },
+        {
+          "id": "install-dnf",
+          "name": "安装系统依赖包",
+          "role": "side-effect",
+          "refs": [{ "file": "worker/main.py", "lines": [25, 30] }]
+        },
+        {
+          "id": "start-all",
+          "name": "并行启动各项目",
+          "role": "side-effect",
+          "refs": [{ "file": "worker/main.py", "lines": [42, 43] }]
+        },
+        {
+          "id": "mark-ready",
+          "name": "写入就绪标记",
+          "role": "output",
+          "refs": [{ "file": "worker/main.py", "lines": [45, 48] }]
+        }
+      ],
+      "flow": [
+        { "from": "setup-log", "to": "load-clusters", "kind": "next" },
+        { "from": "load-clusters", "to": "cleanup-old", "kind": "next" },
+        { "from": "cleanup-old", "to": "install-dnf", "kind": "next" },
+        { "from": "install-dnf", "to": "start-all", "kind": "next" },
+        { "from": "start-all", "to": "mark-ready", "kind": "next" }
+      ],
+      "confidence": 0.93,
+      "provenance": "ai",
+      "tags": ["sdd", "implemented"],
+      "updated_at": "2026-07-27T07:00:00Z"
+    },
+    {
+      "id": "f-clone-and-venv",
+      "name": "克隆与建环境",
+      "summary": "拉取 Git 仓库并用 uv 创建 venv",
+      "epicId": "worker",
+      "triggers": [{ "kind": "event", "detail": "start_project 首次部署" }],
+      "steps": [
+        {
+          "id": "wipe-dir",
+          "name": "清空项目目录",
+          "role": "data-write",
+          "refs": [{ "file": "worker/project_manager.py", "lines": [73, 75] }]
+        },
+        {
+          "id": "git-clone",
+          "name": "克隆远程仓库",
+          "role": "side-effect",
+          "refs": [{ "file": "worker/project_manager.py", "lines": [77, 82] }]
+        },
+        {
+          "id": "pick-python",
+          "name": "选择 Python 版本",
+          "role": "compute",
+          "refs": [{ "file": "worker/project_manager.py", "lines": [84, 87] }]
+        },
+        {
+          "id": "create-venv",
+          "name": "创建虚拟环境",
+          "role": "side-effect",
+          "refs": [{ "file": "worker/project_manager.py", "lines": [92, 112] }]
+        },
+        {
+          "id": "skip-reqs",
+          "name": "跳过无依赖文件",
+          "role": "validation",
+          "refs": [{ "file": "worker/project_manager.py", "lines": [89, 90] }]
+        }
+      ],
+      "flow": [
+        { "from": "wipe-dir", "to": "git-clone", "kind": "next" },
+        { "from": "git-clone", "to": "pick-python", "kind": "next" },
+        { "from": "pick-python", "to": "skip-reqs", "kind": "next" },
+        { "from": "skip-reqs", "to": "create-venv", "kind": "conditional", "condition": "存在 requirements.txt" }
+      ],
+      "confidence": 0.94,
+      "provenance": "ai",
+      "tags": ["sdd", "implemented"],
+      "updated_at": "2026-07-27T07:00:00Z"
+    },
+    {
+      "id": "f-register-s6-service",
+      "name": "注册 s6 服务",
+      "summary": "生成 run 脚本与日志轮转配置",
+      "epicId": "worker",
+      "triggers": [{ "kind": "event", "detail": "项目准备完成后 write_service" }],
+      "steps": [
+        {
+          "id": "build-command",
+          "name": "组装运行命令",
+          "role": "compute",
+          "refs": [{ "file": "worker/project_manager.py", "lines": [124, 133] }]
+        },
+        {
+          "id": "write-run",
+          "name": "写入监督脚本",
+          "role": "data-write",
+          "refs": [{ "file": "worker/s6_config.py", "lines": [71, 81] }]
+        },
+        {
+          "id": "write-log-svc",
+          "name": "配置日志轮转",
+          "role": "data-write",
+          "refs": [{ "file": "worker/s6_config.py", "lines": [87, 96] }]
+        },
+        {
+          "id": "rescan",
+          "name": "通知 s6 重扫",
+          "role": "side-effect",
+          "refs": [{ "file": "worker/project_manager.py", "lines": [165, 166] }]
+        }
+      ],
+      "flow": [
+        { "from": "build-command", "to": "write-run", "kind": "next" },
+        { "from": "write-run", "to": "write-log-svc", "kind": "next" },
+        { "from": "write-log-svc", "to": "rescan", "kind": "next" }
+      ],
+      "confidence": 0.93,
+      "provenance": "ai",
+      "tags": ["sdd", "implemented"],
+      "updated_at": "2026-07-27T07:00:00Z"
+    },
+    {
+      "id": "f-dashboard-auth",
+      "name": "仪表盘登录",
+      "summary": "校验 project.toml 中的仪表盘凭据",
+      "epicId": "dashboard",
+      "triggers": [
+        { "kind": "http", "detail": "GET/POST /login" },
+        { "kind": "http", "detail": "GET /logout" }
+      ],
+      "steps": [
+        {
+          "id": "show-form",
+          "name": "展示登录页",
+          "role": "output",
+          "refs": [{ "file": "app/routes/routes.py", "lines": [390, 404] }]
+        },
+        {
+          "id": "submit-login",
+          "name": "接收登录提交",
+          "role": "input",
+          "refs": [{ "file": "app/routes/routes.py", "lines": [392, 395] }]
+        },
+        {
+          "id": "read-creds",
+          "name": "读取仪表盘凭据",
+          "role": "data-read",
+          "refs": [{ "file": "app/routes/routes.py", "lines": [362, 380] }]
+        },
+        {
+          "id": "check-creds",
+          "name": "比对用户名密码",
+          "role": "auth",
+          "refs": [{ "file": "app/routes/routes.py", "lines": [397, 398] }]
+        },
+        {
+          "id": "set-session",
+          "name": "写入登录会话",
+          "role": "data-write",
+          "refs": [{ "file": "app/routes/routes.py", "lines": [399, 400] }]
+        },
+        {
+          "id": "auth-fail",
+          "name": "提示凭据无效",
+          "role": "error",
+          "refs": [{ "file": "app/routes/routes.py", "lines": [401, 402] }]
+        },
+        {
+          "id": "logout",
+          "name": "清除会话并跳转",
+          "role": "output",
+          "refs": [{ "file": "app/routes/routes.py", "lines": [406, 409] }]
+        }
+      ],
+      "flow": [
+        { "from": "submit-login", "to": "read-creds", "kind": "next" },
+        { "from": "read-creds", "to": "check-creds", "kind": "next" },
+        { "from": "check-creds", "to": "set-session", "kind": "conditional", "condition": "凭据正确" },
+        { "from": "check-creds", "to": "auth-fail", "kind": "conditional", "condition": "凭据错误" },
+        { "from": "show-form", "to": "logout", "kind": "conditional", "condition": "GET /logout" }
+      ],
+      "confidence": 0.9,
+      "provenance": "ai",
+      "tags": ["sdd", "implemented"],
+      "updated_at": "2026-07-27T07:00:00Z"
+    },
+    {
+      "id": "f-list-process-status",
+      "name": "列出进程状态",
+      "summary": "汇总 s6 状态、CPU 与占位信息",
+      "epicId": "dashboard",
+      "triggers": [
+        { "kind": "http", "detail": "GET /service/status" },
+        { "kind": "http", "detail": "GET /" }
+      ],
+      "steps": [
+        {
+          "id": "guard-login",
+          "name": "校验登录状态",
+          "role": "auth",
+          "refs": [{ "file": "app/routes/routes.py", "lines": [382, 387] }]
+        },
+        {
+          "id": "collect",
+          "name": "采集进程快照",
+          "role": "data-read",
+          "refs": [{ "file": "app/routes/routes.py", "lines": [188, 233] }]
+        },
+        {
+          "id": "render-page",
+          "name": "渲染集群页面",
+          "role": "output",
+          "refs": [{ "file": "app/routes/routes.py", "lines": [411, 414] }]
+        },
+        {
+          "id": "json-response",
+          "name": "返回 JSON 列表",
+          "role": "output",
+          "refs": [{ "file": "app/routes/routes.py", "lines": [416, 418] }]
+        }
+      ],
+      "flow": [
+        { "from": "guard-login", "to": "collect", "kind": "next" },
+        { "from": "collect", "to": "render-page", "kind": "conditional", "condition": "访问首页" },
+        { "from": "collect", "to": "json-response", "kind": "conditional", "condition": "访问 status API" }
+      ],
+      "confidence": 0.91,
+      "provenance": "ai",
+      "tags": ["sdd", "implemented"],
+      "updated_at": "2026-07-27T07:00:00Z"
+    },
+    {
+      "id": "f-manage-process",
+      "name": "启停与重启进程",
+      "summary": "通过 s6 控制单个 worker 生命周期",
+      "epicId": "dashboard",
+      "triggers": [
+        { "kind": "http", "detail": "POST /service/start|stop|restart/<name>" }
+      ],
+      "steps": [
+        {
+          "id": "validate-input",
+          "name": "校验动作与名称",
+          "role": "validation",
+          "refs": [{ "file": "app/routes/routes.py", "lines": [503, 507] }]
+        },
+        {
+          "id": "pull-code",
+          "name": "拉取最新代码",
+          "role": "side-effect",
+          "refs": [{ "file": "app/routes/routes.py", "lines": [315, 355] }]
+        },
+        {
+          "id": "invoke-s6",
+          "name": "发送 s6 控制信号",
+          "role": "side-effect",
+          "refs": [{ "file": "app/routes/routes.py", "lines": [517, 550] }]
+        },
+        {
+          "id": "wait-state",
+          "name": "等待目标状态",
+          "role": "validation",
+          "refs": [{ "file": "app/routes/routes.py", "lines": [555, 556] }]
+        },
+        {
+          "id": "push-update",
+          "name": "推送状态更新",
+          "role": "output",
+          "refs": [{ "file": "app/routes/routes.py", "lines": [289, 298] }]
+        },
+        {
+          "id": "manage-fail",
+          "name": "返回控制失败",
+          "role": "error",
+          "refs": [{ "file": "app/routes/routes.py", "lines": [552, 566] }]
+        }
+      ],
+      "flow": [
+        { "from": "validate-input", "to": "pull-code", "kind": "next" },
+        { "from": "pull-code", "to": "invoke-s6", "kind": "next" },
+        { "from": "invoke-s6", "to": "wait-state", "kind": "next" },
+        { "from": "wait-state", "to": "push-update", "kind": "conditional", "condition": "达到预期状态" },
+        { "from": "wait-state", "to": "manage-fail", "kind": "conditional", "condition": "超时或失败" },
+        { "from": "push-update", "to": "manage-fail", "kind": "error" }
+      ],
+      "confidence": 0.9,
+      "provenance": "ai",
+      "tags": ["sdd", "implemented"],
+      "updated_at": "2026-07-27T07:00:00Z"
+    },
+    {
+      "id": "f-pause-resume",
+      "name": "暂停与恢复进程",
+      "summary": "向 worker 进程发送 SIGSTOP/SIGCONT",
+      "epicId": "dashboard",
+      "triggers": [
+        { "kind": "http", "detail": "POST /service/pause/<name>" },
+        { "kind": "http", "detail": "POST /service/resume/<name>" }
+      ],
+      "steps": [
+        {
+          "id": "validate-name",
+          "name": "校验进程名",
+          "role": "validation",
+          "refs": [{ "file": "app/routes/routes.py", "lines": [423, 424] }]
+        },
+        {
+          "id": "pause-pid",
+          "name": "暂停进程 PID",
+          "role": "side-effect",
+          "refs": [{ "file": "app/routes/routes.py", "lines": [254, 270] }]
+        },
+        {
+          "id": "resume-pid",
+          "name": "恢复进程 PID",
+          "role": "side-effect",
+          "refs": [{ "file": "app/routes/routes.py", "lines": [272, 287] }]
+        },
+        {
+          "id": "notify-ui",
+          "name": "通知前端刷新",
+          "role": "output",
+          "refs": [{ "file": "app/routes/routes.py", "lines": [427, 427] }]
+        }
+      ],
+      "flow": [
+        { "from": "validate-name", "to": "pause-pid", "kind": "conditional", "condition": "pause 请求" },
+        { "from": "validate-name", "to": "resume-pid", "kind": "conditional", "condition": "resume 请求" },
+        { "from": "pause-pid", "to": "notify-ui", "kind": "next" },
+        { "from": "resume-pid", "to": "notify-ui", "kind": "next" }
+      ],
+      "confidence": 0.88,
+      "provenance": "ai",
+      "tags": ["sdd", "implemented"],
+      "updated_at": "2026-07-27T07:00:00Z"
+    },
+    {
+      "id": "f-redeploy-process",
+      "name": "重部署 worker",
+      "summary": "清目录、重新克隆并重建 venv",
+      "epicId": "dashboard",
+      "triggers": [{ "kind": "http", "detail": "POST /service/redeploy/<name>" }],
+      "steps": [
+        {
+          "id": "find-config",
+          "name": "查找项目配置",
+          "role": "data-read",
+          "refs": [{ "file": "app/routes/routes.py", "lines": [716, 753] }]
+        },
+        {
+          "id": "stop-clean",
+          "name": "停止并清理进程",
+          "role": "side-effect",
+          "refs": [{ "file": "app/routes/routes.py", "lines": [687, 703] }]
+        },
+        {
+          "id": "reclone",
+          "name": "重新克隆与建环境",
+          "role": "side-effect",
+          "refs": [{ "file": "app/routes/routes.py", "lines": [755, 804] }]
+        },
+        {
+          "id": "bring-up",
+          "name": "重新拉起服务",
+          "role": "side-effect",
+          "refs": [{ "file": "app/routes/routes.py", "lines": [806, 857] }]
+        },
+        {
+          "id": "missing-config",
+          "name": "报告配置缺失",
+          "role": "error",
+          "refs": [{ "file": "app/cron.py", "lines": [124, 127] }]
+        }
+      ],
+      "flow": [
+        { "from": "find-config", "to": "stop-clean", "kind": "conditional", "condition": "配置存在" },
+        { "from": "find-config", "to": "missing-config", "kind": "conditional", "condition": "配置缺失" },
+        { "from": "stop-clean", "to": "reclone", "kind": "next" },
+        { "from": "reclone", "to": "bring-up", "kind": "next" }
+      ],
+      "confidence": 0.89,
+      "provenance": "ai",
+      "tags": ["sdd", "implemented"],
+      "updated_at": "2026-07-27T07:00:00Z"
+    },
+    {
+      "id": "f-stream-logs",
+      "name": "查看与下载日志",
+      "summary": "下载静态日志或 WebSocket 实时 tail",
+      "epicId": "dashboard",
+      "triggers": [
+        { "kind": "http", "detail": "GET /service/log/<name>" },
+        { "kind": "http", "detail": "GET /service/stream/<name>" }
+      ],
+      "steps": [
+        {
+          "id": "locate-log",
+          "name": "定位日志文件",
+          "role": "data-read",
+          "refs": [{ "file": "app/routes/routes.py", "lines": [581, 586] }]
+        },
+        {
+          "id": "download",
+          "name": "返回日志下载",
+          "role": "output",
+          "refs": [{ "file": "app/routes/routes.py", "lines": [588, 594] }]
+        },
+        {
+          "id": "tail-stream",
+          "name": "持续推送日志行",
+          "role": "output",
+          "refs": [{ "file": "app/routes/routes.py", "lines": [866, 874] }]
+        },
+        {
+          "id": "no-log",
+          "name": "报告日志不存在",
+          "role": "error",
+          "refs": [{ "file": "app/routes/routes.py", "lines": [582, 586] }]
+        }
+      ],
+      "flow": [
+        { "from": "locate-log", "to": "download", "kind": "conditional", "condition": "下载请求" },
+        { "from": "locate-log", "to": "tail-stream", "kind": "conditional", "condition": "流式请求" },
+        { "from": "locate-log", "to": "no-log", "kind": "conditional", "condition": "文件不存在" }
+      ],
+      "confidence": 0.88,
+      "provenance": "ai",
+      "tags": ["sdd", "implemented"],
+      "updated_at": "2026-07-27T07:00:00Z"
+    },
+    {
+      "id": "f-realtime-status",
+      "name": "实时状态推送",
+      "summary": "Socket.IO 广播进程状态变更",
+      "epicId": "dashboard",
+      "triggers": [
+        { "kind": "event", "detail": "Socket.IO connect / request_status" }
+      ],
+      "steps": [
+        {
+          "id": "on-connect",
+          "name": "客户端接入",
+          "role": "input",
+          "refs": [{ "file": "app/routes/routes.py", "lines": [442, 446] }]
+        },
+        {
+          "id": "on-request",
+          "name": "接收状态请求",
+          "role": "input",
+          "refs": [{ "file": "app/routes/routes.py", "lines": [452, 453] }]
+        },
+        {
+          "id": "gather",
+          "name": "汇总进程列表",
+          "role": "data-read",
+          "refs": [{ "file": "app/routes/routes.py", "lines": [455, 456] }]
+        },
+        {
+          "id": "emit",
+          "name": "推送状态事件",
+          "role": "output",
+          "refs": [{ "file": "app/routes/routes.py", "lines": [458, 462] }]
+        },
+        {
+          "id": "emit-error",
+          "name": "推送错误信息",
+          "role": "error",
+          "refs": [{ "file": "app/routes/routes.py", "lines": [463, 468] }]
+        }
+      ],
+      "flow": [
+        { "from": "on-connect", "to": "gather", "kind": "next" },
+        { "from": "on-request", "to": "gather", "kind": "next" },
+        { "from": "gather", "to": "emit", "kind": "next" },
+        { "from": "gather", "to": "emit-error", "kind": "error" }
+      ],
+      "confidence": 0.9,
+      "provenance": "ai",
+      "tags": ["sdd", "implemented"],
+      "updated_at": "2026-07-27T07:00:00Z"
+    },
+    {
+      "id": "f-cron-schedule",
+      "name": "定时重启与重部署",
+      "summary": "按 project.cron 规则周期执行",
+      "epicId": "scheduler",
+      "triggers": [{ "kind": "cron", "detail": "app 启动后后台 asyncio 任务" }],
+      "steps": [
+        {
+          "id": "load-cron",
+          "name": "加载 cron 规则",
+          "role": "data-read",
+          "refs": [{ "file": "app/cron.py", "lines": [36, 55] }]
+        },
+        {
+          "id": "arm-tasks",
+          "name": "注册后台任务",
+          "role": "side-effect",
+          "refs": [{ "file": "app/cron.py", "lines": [226, 248] }]
+        },
+        {
+          "id": "sleep-interval",
+          "name": "等待调度间隔",
+          "role": "other",
+          "refs": [{ "file": "app/cron.py", "lines": [159, 161] }]
+        },
+        {
+          "id": "fire-restart",
+          "name": "触发重启或重部署",
+          "role": "side-effect",
+          "refs": [{ "file": "app/cron.py", "lines": [172, 178] }]
+        },
+        {
+          "id": "notify-dashboard",
+          "name": "通知仪表盘刷新",
+          "role": "output",
+          "refs": [{ "file": "app/cron.py", "lines": [105, 106] }]
+        }
+      ],
+      "flow": [
+        { "from": "load-cron", "to": "arm-tasks", "kind": "next" },
+        { "from": "arm-tasks", "to": "sleep-interval", "kind": "loop", "condition": "任务运行中" },
+        { "from": "sleep-interval", "to": "fire-restart", "kind": "next" },
+        { "from": "fire-restart", "to": "notify-dashboard", "kind": "async" },
+        { "from": "notify-dashboard", "to": "sleep-interval", "kind": "loop", "condition": "调度任务继续运行" }
+      ],
+      "confidence": 0.9,
+      "provenance": "ai",
+      "tags": ["sdd", "implemented"],
+      "updated_at": "2026-07-27T07:00:00Z"
+    },
+    {
+      "id": "f-cron-idle-start",
+      "name": "空闲自动启动",
+      "summary": "进程停止超过阈值后自动拉起",
+      "epicId": "scheduler",
+      "triggers": [{ "kind": "cron", "detail": "project.cron.idle 后台轮询" }],
+      "steps": [
+        {
+          "id": "poll-status",
+          "name": "轮询 s6 状态",
+          "role": "data-read",
+          "refs": [{ "file": "app/cron.py", "lines": [201, 206] }]
+        },
+        {
+          "id": "accumulate",
+          "name": "累计停止时长",
+          "role": "compute",
+          "refs": [{ "file": "app/cron.py", "lines": [208, 209] }]
+        },
+        {
+          "id": "auto-start",
+          "name": "自动启动进程",
+          "role": "side-effect",
+          "refs": [{ "file": "app/cron.py", "lines": [210, 215] }]
+        },
+        {
+          "id": "reset-timer",
+          "name": "重置空闲计时",
+          "role": "other",
+          "refs": [{ "file": "app/cron.py", "lines": [222, 224] }]
+        }
+      ],
+      "flow": [
+        { "from": "poll-status", "to": "accumulate", "kind": "conditional", "condition": "状态为 STOPPED" },
+        { "from": "accumulate", "to": "auto-start", "kind": "conditional", "condition": "超过 idle 阈值" },
+        { "from": "auto-start", "to": "reset-timer", "kind": "next" },
+        { "from": "poll-status", "to": "reset-timer", "kind": "conditional", "condition": "非 STOPPED" }
+      ],
+      "confidence": 0.88,
+      "provenance": "ai",
+      "tags": ["sdd", "implemented"],
+      "updated_at": "2026-07-27T07:00:00Z"
+    },
+    {
+      "id": "f-ping-keepalive",
+      "name": "保活 Ping",
+      "summary": "等待就绪后周期访问自身 URL",
+      "epicId": "keepalive",
+      "triggers": [{ "kind": "startup", "detail": "python3 -m ping" }],
+      "steps": [
+        {
+          "id": "check-enabled",
+          "name": "检查保活开关",
+          "role": "validation",
+          "refs": [{ "file": "ping/main.py", "lines": [24, 27] }]
+        },
+        {
+          "id": "resolve-url",
+          "name": "解析目标 URL",
+          "role": "data-read",
+          "refs": [{ "file": "ping/main.py", "lines": [29, 31] }]
+        },
+        {
+          "id": "wait-ready",
+          "name": "等待 worker 就绪",
+          "role": "validation",
+          "refs": [{ "file": "ping/services/pinger.py", "lines": [13, 16] }]
+        },
+        {
+          "id": "ping-http",
+          "name": "发送 HTTP 请求",
+          "role": "side-effect",
+          "refs": [{ "file": "ping/services/pinger.py", "lines": [19, 30] }]
+        },
+        {
+          "id": "wait-interval",
+          "name": "等待下次间隔",
+          "role": "other",
+          "refs": [{ "file": "ping/services/pinger.py", "lines": [48, 48] }]
+        },
+        {
+          "id": "count-fail",
+          "name": "累计失败次数",
+          "role": "compute",
+          "refs": [{ "file": "ping/services/pinger.py", "lines": [40, 47] }]
+        },
+        {
+          "id": "url-missing",
+          "name": "报告 URL 缺失",
+          "role": "error",
+          "refs": [{ "file": "ping/main.py", "lines": [31, 36] }]
+        }
+      ],
+      "flow": [
+        { "from": "check-enabled", "to": "resolve-url", "kind": "conditional", "condition": "ping 已启用" },
+        { "from": "resolve-url", "to": "wait-ready", "kind": "conditional", "condition": "URL 已解析" },
+        { "from": "resolve-url", "to": "url-missing", "kind": "conditional", "condition": "URL 缺失" },
+        { "from": "wait-ready", "to": "ping-http", "kind": "next" },
+        { "from": "ping-http", "to": "count-fail", "kind": "conditional", "condition": "请求失败" },
+        { "from": "ping-http", "to": "wait-interval", "kind": "next" },
+        { "from": "count-fail", "to": "wait-interval", "kind": "next" },
+        { "from": "wait-interval", "to": "ping-http", "kind": "loop", "condition": "未达最大失败次数" }
+      ],
+      "confidence": 0.91,
+      "provenance": "ai",
+      "tags": ["sdd", "implemented"],
+      "updated_at": "2026-07-27T07:00:00Z"
+    }
+  ],
+  "cross_feature": [
+    {
+      "from": "f-orchestrate-start",
+      "to": "f-upstream-sync",
+      "kind": "triggers",
+      "note": "启动编排先执行自更新线程"
+    },
+    {
+      "from": "f-orchestrate-start",
+      "to": "f-worker-lifecycle",
+      "kind": "triggers",
+      "note": "编排脚本拉起项目管理器"
+    },
+    {
+      "from": "f-orchestrate-start",
+      "to": "f-ping-keepalive",
+      "kind": "triggers",
+      "note": "编排脚本拉起保活进程"
+    },
+    {
+      "from": "f-load-project-config",
+      "to": "f-worker-lifecycle",
+      "kind": "depends_on",
+      "note": "项目管理器依赖解析后的配置"
+    },
+    {
+      "from": "f-worker-lifecycle",
+      "to": "f-clone-and-venv",
+      "kind": "triggers",
+      "note": "启动各项目时触发克隆"
+    },
+    {
+      "from": "f-clone-and-venv",
+      "to": "f-register-s6-service",
+      "kind": "flow",
+      "note": "克隆完成后注册监督服务"
+    },
+    {
+      "from": "f-dashboard-auth",
+      "to": "f-list-process-status",
+      "kind": "triggers",
+      "note": "登录成功后进入集群视图"
+    },
+    {
+      "from": "f-manage-process",
+      "to": "f-realtime-status",
+      "kind": "flow",
+      "mode": "async",
+      "note": "控制完成后异步推送状态"
+    },
+    {
+      "from": "f-manage-process",
+      "to": "f-register-s6-service",
+      "kind": "depends_on",
+      "note": "启停依赖已注册的 s6 服务"
+    },
+    {
+      "from": "f-cron-schedule",
+      "to": "f-manage-process",
+      "kind": "triggers",
+      "note": "定时任务触发重启流程"
+    },
+    {
+      "from": "f-cron-schedule",
+      "to": "f-redeploy-process",
+      "kind": "triggers",
+      "note": "redeploy 规则触发重部署"
+    },
+    {
+      "from": "f-cron-idle-start",
+      "to": "f-manage-process",
+      "kind": "triggers",
+      "note": "空闲达标后自动 start"
+    },
+    {
+      "from": "f-ping-keepalive",
+      "to": "f-worker-lifecycle",
+      "kind": "depends_on",
+      "note": "等待 worker 写入就绪标记"
+    },
+    {
+      "from": "f-load-project-config",
+      "to": "f-dashboard-auth",
+      "kind": "depends_on",
+      "note": "仪表盘凭据来自 defaults"
+    }
+  ],
+  "epic_flow": [
+    {
+      "from": "bootstrap",
+      "to": "config",
+      "kind": "next",
+      "note": "容器启动后加载 project.toml"
+    },
+    {
+      "from": "config",
+      "to": "worker",
+      "kind": "next",
+      "note": "配置驱动各 worker 克隆与监督"
+    },
+    {
+      "from": "worker",
+      "to": "dashboard",
+      "kind": "next",
+      "note": "进程就绪后可在仪表盘观测与控制"
+    },
+    {
+      "from": "dashboard",
+      "to": "scheduler",
+      "kind": "depends_on",
+      "note": "Web 应用启动后注册 cron 后台任务"
+    },
+    {
+      "from": "worker",
+      "to": "keepalive",
+      "kind": "depends_on",
+      "note": "worker 就绪后保活才开始 ping"
+    }
+  ]
+}
