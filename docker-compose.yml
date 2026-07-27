@@ -1,31 +1,53 @@
 # 本机 Docker 一键启动：
-#   HTTP_PROXY=http://127.0.0.1:20172 HTTPS_PROXY=http://127.0.0.1:20172 docker compose up -d --build
+#   docker compose up -d --build
 # 停止：docker compose down
 # 查看日志：docker compose logs -f
 #
 # 说明：即便用本地源码构建，Dockerfile 的 FROM 仍会拉取基础镜像 mysterydemon/pypen；
-# 构建阶段还会下载 s6-overlay。无法直连时请带上上方代理环境变量。
+# 构建阶段还会下载 s6-overlay。无法直连时依赖下方代理配置。
+#
+# 代理分两层（地址故意不同，不要混用）：
+#   1) build.args  — 构建期用 host 网络，代理地址是 127.0.0.1
+#   2) environment — 运行期 worker 用 uv/pip/git 装包；容器在 bridge 网桥里，
+#      访问宿主机代理必须用 host.docker.internal（见 extra_hosts）
+#
+# 常用覆盖：
+#   PROXY_PORT=7890 docker compose up -d --build          # 改端口（需同时改下面默认值，或设完整 URL）
+#   BUILD_HTTP_PROXY=http://127.0.0.1:7890 \
+#   RUNTIME_HTTP_PROXY=http://host.docker.internal:7890 \
+#     docker compose up -d --build
+#   RUNTIME_HTTP_PROXY= docker compose up -d              # 关闭运行时代理（设为空字符串无效时直接注释 environment 里几行）
 
 services:
   pypen:
     build:
       context: .
-      # 构建容器使用宿主机网络，才能访问本机代理 127.0.0.1:20172
+      # 构建容器使用宿主机网络，才能访问本机代理 127.0.0.1
       network: host
       args:
-        HTTP_PROXY: ${HTTP_PROXY:-http://127.0.0.1:20172}
-        HTTPS_PROXY: ${HTTPS_PROXY:-http://127.0.0.1:20172}
-        http_proxy: ${HTTP_PROXY:-http://127.0.0.1:20172}
-        https_proxy: ${HTTPS_PROXY:-http://127.0.0.1:20172}
-        ALL_PROXY: ${ALL_PROXY:-http://127.0.0.1:20172}
+        HTTP_PROXY: ${BUILD_HTTP_PROXY:-http://127.0.0.1:20172}
+        HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-${BUILD_HTTP_PROXY:-http://127.0.0.1:20172}}
+        http_proxy: ${BUILD_HTTP_PROXY:-http://127.0.0.1:20172}
+        https_proxy: ${BUILD_HTTPS_PROXY:-${BUILD_HTTP_PROXY:-http://127.0.0.1:20172}}
+        ALL_PROXY: ${BUILD_ALL_PROXY:-${BUILD_HTTP_PROXY:-http://127.0.0.1:20172}}
         NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
     image: pypen:local
     container_name: pypen
     restart: unless-stopped
     ports:
       - "23413:5000"
+    # 让容器内能解析并访问宿主机上的代理端口
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       PORT: "5000"
+      # 运行时代理：uv / pip / git 会读取这些变量下载 Python 包与克隆仓库
+      HTTP_PROXY: ${RUNTIME_HTTP_PROXY:-http://host.docker.internal:20172}
+      HTTPS_PROXY: ${RUNTIME_HTTPS_PROXY:-${RUNTIME_HTTP_PROXY:-http://host.docker.internal:20172}}
+      http_proxy: ${RUNTIME_HTTP_PROXY:-http://host.docker.internal:20172}
+      https_proxy: ${RUNTIME_HTTPS_PROXY:-${RUNTIME_HTTP_PROXY:-http://host.docker.internal:20172}}
+      ALL_PROXY: ${RUNTIME_ALL_PROXY:-${RUNTIME_HTTP_PROXY:-http://host.docker.internal:20172}}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,host.docker.internal}
       # 本机一般不需要保活；若 project.toml 里 ping=true 且仍要 ping，可取消下行注释
       # APP_URL: "http://localhost:5000"
     volumes:
