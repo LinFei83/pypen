@@ -11,7 +11,7 @@
     {
       "id": "bootstrap",
       "name": "容器启动",
-      "summary": "单容器内编排自更新、Web、监督器与各子进程",
+      "summary": "经 Docker Compose 或镜像 CMD 在单容器内编排各子进程",
       "order": 0,
       "importance": "core",
       "tags": ["sdd"]
@@ -112,8 +112,18 @@
       "name": "多进程编排启动",
       "summary": "依次拉起 Web、s6、worker 与 ping 子进程",
       "epicId": "bootstrap",
-      "triggers": [{ "kind": "startup", "detail": "python3 start.py / Docker CMD" }],
+      "triggers": [{ "kind": "startup", "detail": "docker compose up / Docker CMD / python3 start.py" }],
       "steps": [
+        {
+          "id": "compose-entry",
+          "name": "解析 Compose 入口",
+          "role": "side-effect",
+          "refs": [
+            { "file": "docker-compose.yml" },
+            { "file": "Dockerfile", "lines": [19, 20] },
+            { "file": "heroku.yml" }
+          ]
+        },
         {
           "id": "run-update",
           "name": "执行自更新",
@@ -146,6 +156,7 @@
         }
       ],
       "flow": [
+        { "from": "compose-entry", "to": "run-update", "kind": "next" },
         { "from": "run-update", "to": "spawn-uvicorn", "kind": "next" },
         { "from": "spawn-uvicorn", "to": "spawn-s6", "kind": "async" },
         { "from": "spawn-s6", "to": "spawn-worker", "kind": "async" },
@@ -154,7 +165,7 @@
       "confidence": 0.95,
       "provenance": "ai",
       "tags": ["sdd", "implemented"],
-      "updated_at": "2026-07-27T07:00:00Z"
+      "updated_at": "2026-07-27T07:13:00Z"
     },
     {
       "id": "f-load-project-config",

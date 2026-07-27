@@ -1,0 +1,37 @@
+# 本机 Docker 一键启动：docker compose up -d
+# 停止：docker compose down
+# 查看日志：docker compose logs -f
+
+services:
+  pypen:
+    build: .
+    image: pypen:local
+    container_name: pypen
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      PORT: "5000"
+      # 本机一般不需要保活；若 project.toml 里 ping=true 且仍要 ping，可取消下行注释
+      # APP_URL: "http://localhost:5000"
+    volumes:
+      # 业务配置（已在 .gitignore，勿提交密钥）
+      - ./project.toml:/app/project.toml:ro
+      # worker 日志持久化
+      - pypen-logs:/var/log/s6
+    # 健康检查：仪表盘端口已监听即可（不依赖登录页 HTTP 状态）
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import socket; s=socket.create_connection(('127.0.0.1',5000),3); s.close()",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+volumes:
+  pypen-logs:
