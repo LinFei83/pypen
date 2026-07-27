@@ -346,3 +346,155 @@
 .confirm-modal[data-variant="warning"] .confirm-ok:hover {
     background: #D97706;
 }
+
+.project-form-panel {
+    max-width: 32rem;
+    width: min(92vw, 32rem);
+}
+
+.project-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-top: 0.5rem;
+}
+
+.pf-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #64748B;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.pf-field input,
+.pf-field textarea {
+    font-size: 0.875rem;
+    font-weight: 500;
+    text-transform: none;
+    letter-spacing: normal;
+    color: #0F172A;
+    border: 1px solid #E5E7EB;
+    border-radius: 0.5rem;
+    padding: 0.55rem 0.75rem;
+    background: #FFFFFF;
+    font-family: inherit;
+}
+
+.pf-field input[readonly] {
+    background: #F8FAFC;
+    color: #64748B;
+}
+
+.pf-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.75rem;
+}
+
+.pf-checks {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    font-size: 0.8rem;
+    color: #334155;
+    font-weight: 500;
+}
+
+.pf-checks label {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+}
+
+.pf-hint {
+    font-size: 0.75rem;
+    color: #94A3B8;
+    margin: 0;
+}
+
+#project-manager-table td,
+#project-manager-table th {
+    vertical-align: middle;
+}
+
+.pm-badge {
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.pm-badge-registered {
+    background: #ECFDF5;
+    color: #047857;
+}
+
+.pm-badge-unregistered {
+    background: #FFF7ED;
+    color: #C2410C;
+}
+
+.pm-badge-missing {
+    background: #FEF2F2;
+    color: #B91C1C;
+}
+
+.pm-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+}
+
+.pm-btn {
+    padding: 0.35rem 0.7rem;
+    border-radius: 0.45rem;
+    border: 1px solid #E5E7EB;
+    background: #FFFFFF;
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: #334155;
+    cursor: pointer;
+}
+
+.pm-btn:hover {
+    background: #F8FAFC;
+}
+
+.pm-btn-primary {
+    background: #10B981;
+    border-color: #10B981;
+    color: #FFFFFF;
+}
+
+.pm-btn-primary:hover {
+    background: #059669;
+}
+
+.pm-btn-danger {
+    color: #B91C1C;
+    border-color: #FECACA;
+}
+
+.pm-cmd {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    color: #475569;
+    max-width: 18rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+    .pf-grid {
+        grid-template-columns: 1fr;
+    }
+}

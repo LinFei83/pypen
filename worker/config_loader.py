@@ -129,12 +129,15 @@ def inject_access_token(git_url: str, token: str | None) -> str:
     scheme, rest = match.groups()
     return f"{scheme}x-access-token:{token}@{rest}"
 
-def _is_valid_project_id(project_id: str) -> bool:
+def is_valid_project_id(project_id: str) -> bool:
     if not project_id or project_id.startswith("."):
         return False
     if "/" in project_id or "\\" in project_id:
         return False
     return bool(_ID_RE.fullmatch(project_id))
+
+# 兼容旧私有名
+_is_valid_project_id = is_valid_project_id
 
 def validate_config(projects: list[dict[str, Any]]) -> bool:
     seen_ids: set[str] = set()

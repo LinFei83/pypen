@@ -400,6 +400,22 @@ def login_required(f):
         return await f(*args, **kwargs)
     return decorated_function
 
+def api_login_required(f):
+    @wraps(f)
+    async def decorated_function(*args, **kwargs):
+        if 'logged_in' not in session:
+            return jsonify({"status": "error", "message": "未登录"}), 401
+        return await f(*args, **kwargs)
+    return decorated_function
+
+_PROJECT_CFG_LOCK: asyncio.Lock | None = None
+
+def _project_cfg_lock() -> asyncio.Lock:
+    global _PROJECT_CFG_LOCK
+    if _PROJECT_CFG_LOCK is None:
+        _PROJECT_CFG_LOCK = asyncio.Lock()
+    return _PROJECT_CFG_LOCK
+
 @app.route('/login', methods=['GET', 'POST'])
 async def login():
     if request.method == 'POST':
@@ -897,3 +913,191 @@ async def stream_service_log(process_name):
         "Connection": "keep-alive",
     }
     return Response(_tail(), headers=headers, mimetype="text/event-stream")
+
+
+def _normalize_api_entry(payload: dict, *, project_id: str | None = None) -> dict:
+    pid = str(project_id or payload.get("id") or "").strip()
+    cron_in = payload.get("cron") if isinstance(payload.get("cron"), dict) else {}
+    env_in = payload.get("env") if isinstance(payload.get("env"), dict) else {}
+    return {
+        "id": pid,
+        "run_command": str(payload.get("run_command") or "").strip(),
+        "logs_size": str(payload.get("logs_size") or "10M").strip() or "10M",
+        "env": {str(k): str(v) for k, v in env_in.items()},
+        "cron": {
+            "restart_on": str(cron_in.get("restart_on", "0")),
+            "redeploy": str(cron_in.get("redeploy", "false")).lower(),
+            "idle": str(cron_in.get("idle", "")),
+            "pull_commits": str(cron_in.get("pull_commits", "false")).lower(),
+        },
+    }
+
+async def _apply_project_service(entry: dict, *, start: bool = True) -> None:
+    from worker.s6_config import write_service
+    from worker.toml_store import entry_to_cluster
+
+    cluster = entry_to_cluster(entry)
+    command = cluster["run_command"]
+    write_service(cluster, command)
+    s6_rescan()
+    if start:
+        # 若曾 stop 卸掉 run，先恢复
+        _restore_run(cluster["id"])
+        s6_svc("-u", cluster["id"])
+
+async def _unapply_project_service(project_id: str) -> None:
+    from worker.s6_config import remove_service
+
+    slug = _slug(project_id)
+    svc = _svc_path(slug)
+    if svc.is_dir():
+        _run_cmd(["s6-svc", "-wD", "-d", str(svc)], timeout=15, quiet=True)
+        _kill_orphans(slug)
+        await _wait_for_status(slug, None)
+        remove_service(slug)
+        STOPPED_SERVICE_SCRIPTS.pop(slug, None)
+    s6_rescan()
+
+@app.route("/api/projects", methods=["GET"])
+@api_login_required
+async def api_list_projects():
+    from worker.toml_store import list_project_dirs, read_raw_projects
+
+    dirs = list_project_dirs()
+    registered = {p["id"]: p for p in read_raw_projects()}
+    services = set(list_services())
+    items = []
+    for name in dirs:
+        conf = registered.get(name)
+        status = None
+        if name in services:
+            parsed = s6_svstat(name)
+            status = parsed["status"] if parsed else "PENDING"
+        elif conf:
+            status = "PENDING"
+        items.append(
+            {
+                "id": name,
+                "registered": conf is not None,
+                "has_dir": True,
+                "run_command": (conf or {}).get("run_command", ""),
+                "logs_size": (conf or {}).get("logs_size", "10M"),
+                "env": (conf or {}).get("env") or {},
+                "cron": (conf or {}).get("cron") or {},
+                "service_status": status,
+            }
+        )
+    # toml 中有登记但目录缺失的也列出
+    for pid, conf in registered.items():
+        if pid in dirs:
+            continue
+        items.append(
+            {
+                "id": pid,
+                "registered": True,
+                "has_dir": False,
+                "run_command": conf.get("run_command", ""),
+                "logs_size": conf.get("logs_size", "10M"),
+                "env": conf.get("env") or {},
+                "cron": conf.get("cron") or {},
+                "service_status": None,
+            }
+        )
+    items.sort(key=lambda x: x["id"].lower())
+    return jsonify({"status": "success", "projects": items})
+
+@app.route("/api/projects", methods=["POST"])
+@api_login_required
+async def api_create_project():
+    from worker.toml_store import upsert_project, validate_entry
+    from app.cron import reload_cron_tasks
+
+    payload = await request.get_json(force=True, silent=True) or {}
+    entry = _normalize_api_entry(payload)
+    err = validate_entry(entry, require_dir=True)
+    if err:
+        return jsonify({"status": "error", "message": err}), 400
+
+    async with _project_cfg_lock():
+        try:
+            await asyncio.get_event_loop().run_in_executor(None, upsert_project, entry)
+            await _apply_project_service(entry, start=True)
+            await reload_cron_tasks()
+        except Exception as exc:
+            logger.exception(f"api_create_project failed: {exc}")
+            return jsonify({"status": "error", "message": str(exc)}), 500
+
+    await broadcast_status_update()
+    return jsonify({
+        "status": "success",
+        "message": f"已启用项目 {entry['id']}",
+        "project": entry,
+    })
+
+@app.route("/api/projects/<project_id>", methods=["PUT"])
+@api_login_required
+async def api_update_project(project_id):
+    from worker.toml_store import read_raw_projects, upsert_project, validate_entry
+    from app.cron import reload_cron_tasks
+
+    if not _VALID_NAME_RE.match(project_id):
+        return jsonify({"status": "error", "message": "无效的项目名称"}), 400
+
+    known = {p["id"] for p in read_raw_projects()}
+    if project_id not in known:
+        return jsonify({"status": "error", "message": f"未登记项目：{project_id}"}), 404
+
+    payload = await request.get_json(force=True, silent=True) or {}
+    entry = _normalize_api_entry(payload, project_id=project_id)
+    err = validate_entry(entry, require_dir=True)
+    if err:
+        return jsonify({"status": "error", "message": err}), 400
+
+    async with _project_cfg_lock():
+        try:
+            # 更新 run 脚本前先停服务，避免半更新
+            await _unapply_project_service(project_id)
+            await asyncio.get_event_loop().run_in_executor(None, upsert_project, entry)
+            await _apply_project_service(entry, start=True)
+            await reload_cron_tasks()
+        except Exception as exc:
+            logger.exception(f"api_update_project failed: {exc}")
+            return jsonify({"status": "error", "message": str(exc)}), 500
+
+    await broadcast_status_update()
+    return jsonify({
+        "status": "success",
+        "message": f"已更新项目 {project_id}",
+        "project": entry,
+    })
+
+@app.route("/api/projects/<project_id>", methods=["DELETE"])
+@api_login_required
+async def api_delete_project(project_id):
+    from worker.toml_store import remove_project
+    from app.cron import reload_cron_tasks
+
+    if not _VALID_NAME_RE.match(project_id):
+        return jsonify({"status": "error", "message": "无效的项目名称"}), 400
+
+    async with _project_cfg_lock():
+        try:
+            await _unapply_project_service(project_id)
+            removed = await asyncio.get_event_loop().run_in_executor(
+                None, remove_project, project_id
+            )
+            if not removed:
+                return jsonify({
+                    "status": "error",
+                    "message": f"project.toml 中没有 {project_id}",
+                }), 404
+            await reload_cron_tasks()
+        except Exception as exc:
+            logger.exception(f"api_delete_project failed: {exc}")
+            return jsonify({"status": "error", "message": str(exc)}), 500
+
+    await broadcast_status_update()
+    return jsonify({
+        "status": "success",
+        "message": f"已取消登记 {project_id}（未删除 projects/{project_id}/）",
+    })

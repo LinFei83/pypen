@@ -32,6 +32,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     fetchStatusHttp();
     httpPollInterval = setInterval(fetchStatusHttp, POLL_MS);
+    initProjectManager();
 
     if (typeof io !== 'function') {
         setConnectionStatus(false, '轮询中');
@@ -462,4 +463,253 @@ function redeploy(processName) {
 function streamLogs(processName) {
     const url = `/service/stream-view/${encodeURIComponent(processName)}`;
     window.open(url, `_logs_${processName}`, 'noopener');
+}
+
+let cachedProjects = [];
+
+function initProjectManager() {
+    const refreshBtn = document.getElementById('btn-refresh-projects');
+    if (refreshBtn) {
+        refreshBtn.addEventListener('click', () => loadProjects());
+    }
+    const form = document.getElementById('project-form');
+    const cancel = document.getElementById('project-form-cancel');
+    const modal = document.getElementById('project-form-modal');
+    if (form) {
+        form.addEventListener('submit', onProjectFormSubmit);
+    }
+    if (cancel) {
+        cancel.addEventListener('click', closeProjectForm);
+    }
+    if (modal) {
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) closeProjectForm();
+        });
+    }
+    loadProjects();
+}
+
+function loadProjects() {
+    const empty = document.getElementById('project-manager-empty');
+    fetch('/api/projects', { headers: { Accept: 'application/json' } })
+        .then((r) => {
+            if (r.status === 401) {
+                window.location.href = '/login';
+                return null;
+            }
+            return r.json();
+        })
+        .then((data) => {
+            if (!data || data.status !== 'success') {
+                if (empty) empty.textContent = '无法加载项目列表。';
+                return;
+            }
+            cachedProjects = data.projects || [];
+            renderProjectManager(cachedProjects);
+        })
+        .catch(() => {
+            if (empty) empty.textContent = '无法加载项目列表。';
+        });
+}
+
+function renderProjectManager(projects) {
+    const empty = document.getElementById('project-manager-empty');
+    const table = document.getElementById('project-manager-table');
+    const body = document.getElementById('project-manager-body');
+    if (!body || !table || !empty) return;
+
+    body.innerHTML = '';
+    if (!projects.length) {
+        empty.classList.remove('hidden');
+        empty.textContent = 'projects/ 下暂无可用目录。请先在宿主机创建 projects/<id>/。';
+        table.classList.add('hidden');
+        return;
+    }
+    empty.classList.add('hidden');
+    table.classList.remove('hidden');
+
+    projects.forEach((p) => {
+        const tr = document.createElement('tr');
+        tr.className = 'border-t border-slate-100';
+
+        let badgeClass = 'pm-badge-unregistered';
+        let badgeText = '未登记';
+        if (!p.has_dir) {
+            badgeClass = 'pm-badge-missing';
+            badgeText = '缺目录';
+        } else if (p.registered) {
+            badgeClass = 'pm-badge-registered';
+            badgeText = p.service_status || '已登记';
+        }
+
+        const cmd = p.run_command || '—';
+        tr.innerHTML = `
+            <td class="px-4 py-3 font-semibold text-slate-800">${escapeHtml(p.id)}</td>
+            <td class="px-4 py-3"><span class="pm-badge ${badgeClass}">${escapeHtml(badgeText)}</span></td>
+            <td class="px-4 py-3"><div class="pm-cmd" title="${escapeHtml(cmd)}">${escapeHtml(cmd)}</div></td>
+            <td class="px-4 py-3"><div class="pm-actions" data-id="${escapeHtml(p.id)}"></div></td>
+        `;
+        const actions = tr.querySelector('.pm-actions');
+        if (p.has_dir && !p.registered) {
+            appendPmButton(actions, '启用', 'pm-btn-primary', () => openProjectForm(p, 'create'));
+        }
+        if (p.registered && p.has_dir) {
+            appendPmButton(actions, '编辑', '', () => openProjectForm(p, 'edit'));
+            appendPmButton(actions, '取消登记', 'pm-btn-danger', () => confirmUnregister(p.id));
+        }
+        if (p.registered && !p.has_dir) {
+            appendPmButton(actions, '取消登记', 'pm-btn-danger', () => confirmUnregister(p.id));
+        }
+        body.appendChild(tr);
+    });
+}
+
+function appendPmButton(container, label, extra, onClick) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `pm-btn ${extra || ''}`.trim();
+    btn.textContent = label;
+    btn.addEventListener('click', onClick);
+    container.appendChild(btn);
+}
+
+function escapeHtml(text) {
+    return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+function envObjectToText(env) {
+    if (!env || typeof env !== 'object') return '';
+    return Object.keys(env).map((k) => `${k}=${env[k]}`).join('\n');
+}
+
+function parseEnvText(text) {
+    const out = {};
+    String(text || '').split('\n').forEach((line) => {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) return;
+        const idx = trimmed.indexOf('=');
+        if (idx <= 0) return;
+        const key = trimmed.slice(0, idx).trim();
+        const val = trimmed.slice(idx + 1).trim();
+        if (key) out[key] = val;
+    });
+    return out;
+}
+
+function truthyCron(val) {
+    if (typeof val === 'boolean') return val;
+    return String(val || '').trim().toLowerCase() === 'true';
+}
+
+function openProjectForm(project, mode) {
+    const modal = document.getElementById('project-form-modal');
+    const title = document.getElementById('project-form-title');
+    const ok = document.getElementById('project-form-ok');
+    if (!modal) return;
+
+    document.getElementById('pf-mode').value = mode;
+    document.getElementById('pf-id').value = project.id || '';
+    document.getElementById('pf-run').value = project.run_command || '';
+    document.getElementById('pf-logs').value = project.logs_size || '10M';
+    document.getElementById('pf-env').value = envObjectToText(project.env);
+    const cron = project.cron || {};
+    document.getElementById('pf-restart').value = cron.restart_on != null ? String(cron.restart_on) : '0';
+    document.getElementById('pf-idle').value = cron.idle != null ? String(cron.idle) : '';
+    document.getElementById('pf-pull').checked = truthyCron(cron.pull_commits);
+    document.getElementById('pf-redeploy').checked = truthyCron(cron.redeploy);
+
+    if (title) title.textContent = mode === 'edit' ? `编辑项目 ${project.id}` : `启用项目 ${project.id}`;
+    if (ok) ok.textContent = mode === 'edit' ? '保存更改' : '保存并启用';
+
+    modal.classList.remove('hidden');
+    modal.setAttribute('aria-hidden', 'false');
+    document.getElementById('pf-run').focus();
+}
+
+function closeProjectForm() {
+    const modal = document.getElementById('project-form-modal');
+    if (!modal) return;
+    modal.classList.add('hidden');
+    modal.setAttribute('aria-hidden', 'true');
+}
+
+function onProjectFormSubmit(event) {
+    event.preventDefault();
+    const mode = document.getElementById('pf-mode').value;
+    const id = document.getElementById('pf-id').value.trim();
+    const payload = {
+        id,
+        run_command: document.getElementById('pf-run').value.trim(),
+        logs_size: document.getElementById('pf-logs').value.trim() || '10M',
+        env: parseEnvText(document.getElementById('pf-env').value),
+        cron: {
+            restart_on: document.getElementById('pf-restart').value.trim() || '0',
+            idle: document.getElementById('pf-idle').value.trim(),
+            pull_commits: document.getElementById('pf-pull').checked ? 'true' : 'false',
+            redeploy: document.getElementById('pf-redeploy').checked ? 'true' : 'false',
+        },
+    };
+
+    const url = mode === 'edit'
+        ? `/api/projects/${encodeURIComponent(id)}`
+        : '/api/projects';
+    const method = mode === 'edit' ? 'PUT' : 'POST';
+    const okBtn = document.getElementById('project-form-ok');
+    if (okBtn) okBtn.disabled = true;
+
+    fetch(url, {
+        method,
+        headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+        },
+        body: JSON.stringify(payload),
+    })
+        .then((r) => r.json().then((data) => ({ ok: r.ok, data })))
+        .then(({ ok, data }) => {
+            if (!ok || data.status !== 'success') {
+                alert(data.message || '保存失败');
+                return;
+            }
+            closeProjectForm();
+            loadProjects();
+            setTimeout(requestStatus, 800);
+            setTimeout(fetchStatusHttp, 800);
+        })
+        .catch(() => alert('保存失败：网络错误'))
+        .finally(() => {
+            if (okBtn) okBtn.disabled = false;
+        });
+}
+
+function confirmUnregister(projectId) {
+    showConfirm({
+        title: `取消登记 ${projectId}？`,
+        message: '将从 project.toml 移除该条目并卸载 s6 服务。\n\n不会删除 projects/ 下的项目文件夹。',
+        okLabel: '取消登记',
+        variant: 'danger',
+        onConfirm: () => unregisterProject(projectId),
+    });
+}
+
+function unregisterProject(projectId) {
+    fetch(`/api/projects/${encodeURIComponent(projectId)}`, {
+        method: 'DELETE',
+        headers: { Accept: 'application/json' },
+    })
+        .then((r) => r.json().then((data) => ({ ok: r.ok, data })))
+        .then(({ ok, data }) => {
+            if (!ok || data.status !== 'success') {
+                alert(data.message || '取消登记失败');
+                return;
+            }
+            loadProjects();
+            setTimeout(requestStatus, 800);
+            setTimeout(fetchStatusHttp, 800);
+        })
+        .catch(() => alert('取消登记失败：网络错误'));
 }

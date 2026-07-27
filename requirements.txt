@@ -13,3 +13,4 @@ GitPython
 loguru
 wonderwords
 tomli; python_version < "3.11"
+tomlkit

@@ -225,6 +225,24 @@ async def _idle_loop(raw_id: str, minutes: int) -> None:
 
 @app.before_serving
 async def _start_cron_tasks() -> None:
+    await _launch_cron_tasks()
+    logger.info(f"cron: launched {len(_TASKS)} background task(s)")
+
+@app.after_serving
+async def _stop_cron_tasks() -> None:
+    await _cancel_cron_tasks()
+
+async def _cancel_cron_tasks() -> None:
+    for task in _TASKS:
+        task.cancel()
+    for task in _TASKS:
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
+    _TASKS.clear()
+
+async def _launch_cron_tasks() -> None:
     for raw_id, cron in _load_project_crons():
         restart_hours = _coerce_positive_int(cron.get("restart_on"))
         if restart_hours:
@@ -245,15 +263,9 @@ async def _start_cron_tasks() -> None:
                 )
             )
 
-    logger.info(f"cron: launched {len(_TASKS)} background task(s)")
-
-@app.after_serving
-async def _stop_cron_tasks() -> None:
-    for task in _TASKS:
-        task.cancel()
-    for task in _TASKS:
-        try:
-            await task
-        except (asyncio.CancelledError, Exception):
-            pass
-    _TASKS.clear()
+async def reload_cron_tasks() -> None:
+    """配置变更后热重载定时任务（无需重启容器）。"""
+    logger.info("cron: reloading background tasks…")
+    await _cancel_cron_tasks()
+    await _launch_cron_tasks()
+    logger.info(f"cron: reloaded {len(_TASKS)} background task(s)")
