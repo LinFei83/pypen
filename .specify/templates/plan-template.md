@@ -18,29 +18,40 @@
   the iteration process.
 -->
 
-**Language/Version**: [e.g., Python 3.11, Swift 5.9, Rust 1.75 or NEEDS CLARIFICATION]
+**Language/Version**: Python 3.11+ (MUST retain unless Constitution amended)
 
-**Primary Dependencies**: [e.g., FastAPI, UIKit, LLVM or NEEDS CLARIFICATION]
+**Primary Dependencies**: Quart · Uvicorn · python-socket.io · s6-overlay · GitPython · loguru · schedule · psutil · watchdog · aiofiles · uv (install)
 
-**Storage**: [if applicable, e.g., PostgreSQL, CoreData, files or N/A]
+**Storage**: Filesystem + `project.toml` (+ s6 service dirs under `/etc/s6/services`)
 
-**Testing**: [e.g., pytest, XCTest, cargo test or NEEDS CLARIFICATION]
+**Testing**: pytest under `tests/` (introduce scaffold if missing; Constitution V)
 
-**Target Platform**: [e.g., Linux server, iOS 15+, WASM or NEEDS CLARIFICATION]
+**Target Platform**: Linux container (Docker / s6-overlay); PaaS via `heroku.yml` as applicable
 
-**Project Type**: [e.g., library/cli/web-service/mobile-app/compiler/desktop-app or NEEDS CLARIFICATION]
+**Project Type**: Single-container multi-process runner + Quart dashboard
 
-**Performance Goals**: [domain-specific, e.g., 1000 req/s, 10k lines/sec, 60 fps or NEEDS CLARIFICATION]
+**Performance Goals**: [domain-specific, or N/A for this feature]
 
-**Constraints**: [domain-specific, e.g., <200ms p95, <100MB memory, offline-capable or NEEDS CLARIFICATION]
+**Constraints**: Preserve stack/layout (Constitution I); no unrelated refactors (II); secrets via toml/env only (VII)
 
-**Scale/Scope**: [domain-specific, e.g., 10k users, 1M LOC, 50 screens or NEEDS CLARIFICATION]
+**Scale/Scope**: [domain-specific for this feature]
 
 ## Constitution Check
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-[Gates determined based on constitution file]
+Derived from `.specify/memory/constitution.md` (Pypen Constitution v1.0.0):
+
+- [ ] **I. 技术栈与目录结构保留**: Plan stays within `app/` · `worker/` · `ping/` · root entry scripts; no stack swap without amendment
+- [ ] **II. 需求驱动的最小变更**: Scope limited to this feature; no drive-by refactors
+- [ ] **III. 命名与编码规范一致性**: Follow existing `snake_case`, loguru logging, async patterns
+- [ ] **IV. 公共 API 向后兼容**: HTTP `/service/*`, Socket.IO events, `project.toml` fields, exported Python APIs remain compatible or have migration plan
+- [ ] **V. 新增功能必须可测**: Each user story has corresponding automated tests
+- [ ] **VI. 使用既有工具链**: Validate via `requirements.txt` / Dockerfile / `python3 start.py` / project test commands only
+- [ ] **VII. 密钥与配置外置**: No hardcoded tokens/passwords; use `project.toml` or env vars
+- [ ] **VIII. 实现前先阅读相似模块**: Plan names the existing modules that will be read/reused before coding
+
+Any unchecked gate after design MUST be justified in Complexity Tracking below.
 
 ## Project Structure
 
@@ -57,51 +68,21 @@ specs/[###-feature]/
 ```
 
 ### Source Code (repository root)
-<!--
-  ACTION REQUIRED: Replace the placeholder tree below with the concrete layout
-  for this feature. Delete unused options and expand the chosen structure with
-  real paths (e.g., apps/admin, packages/something). The delivered plan must
-  not include Option labels.
--->
 
 ```text
-# [REMOVE IF UNUSED] Option 1: Single project (DEFAULT)
-src/
-├── models/
-├── services/
-├── cli/
-└── lib/
-
-tests/
-├── contract/
-├── integration/
-└── unit/
-
-# [REMOVE IF UNUSED] Option 2: Web application (when "frontend" + "backend" detected)
-backend/
-├── src/
-│   ├── models/
-│   ├── services/
-│   └── api/
-└── tests/
-
-frontend/
-├── src/
-│   ├── components/
-│   ├── pages/
-│   └── services/
-└── tests/
-
-# [REMOVE IF UNUSED] Option 3: Mobile + API (when "iOS/Android" detected)
-api/
-└── [same as backend above]
-
-ios/ or android/
-└── [platform-specific structure: feature modules, UI flows, platform tests]
+app/                     # Quart dashboard, routes, cron, static, templates
+├── routes/
+├── utils/
+├── static/
+└── templates/
+worker/                  # project.toml load, clone/venv, s6 service mgmt
+ping/                    # keep-alive pinger
+tests/                   # automated tests (create as needed)
+start.py · run.py · update.py
+requirements.txt · Dockerfile · project.toml.example
 ```
 
-**Structure Decision**: [Document the selected structure and reference the real
-directories captured above]
+**Structure Decision**: [Document which packages this feature touches; do not invent parallel top-level layouts]
 
 ## Complexity Tracking
 

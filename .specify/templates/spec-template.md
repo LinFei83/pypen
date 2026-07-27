@@ -98,6 +98,16 @@
 - **FR-006**: System MUST authenticate users via [NEEDS CLARIFICATION: auth method not specified - email/password, SSO, OAuth?]
 - **FR-007**: System MUST retain user data for [NEEDS CLARIFICATION: retention period not specified]
 
+### Constitution Constraints *(mandatory alignment)*
+
+Specs MUST NOT require work that violates Pypen Constitution. Call out explicitly when applicable:
+
+- Preserve current stack and directory roles (`app/` / `worker/` / `ping/`); no unrelated large refactors
+- Public contracts (HTTP, Socket.IO, `project.toml`, exported APIs) stay backward compatible or document migration
+- New behavior MUST be covered by automated tests
+- Secrets and environment-specific values come from `project.toml` or env vars — never hardcoded
+- Implementation plans MUST identify existing similar modules to read first
+
 ### Key Entities *(include if feature involves data)*
 
 - **[Entity 1]**: [What it represents, key attributes without implementation]
