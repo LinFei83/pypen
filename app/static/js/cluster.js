@@ -10,13 +10,31 @@ let hasRenderedOnce = false;
 let socketConnected = false;
 let lastHttpOkAt = 0;
 
+const STATUS_LABELS = {
+    RUNNING: '运行中',
+    PENDING: '等待中',
+    BACKOFF: '退避重试',
+    FATAL: '致命错误',
+    STOPPED: '已停止',
+    DOWN: '已停止',
+    UNKNOWN: '未知',
+};
+
+const ACTION_LABELS = {
+    start: '启动',
+    stop: '停止',
+    restart: '重启',
+    pause: '暂停',
+    resume: '恢复',
+};
+
 document.addEventListener('DOMContentLoaded', function () {
 
     fetchStatusHttp();
     httpPollInterval = setInterval(fetchStatusHttp, POLL_MS);
 
     if (typeof io !== 'function') {
-        setConnectionStatus(false, 'Polling');
+        setConnectionStatus(false, '轮询中');
         return;
     }
 
@@ -39,7 +57,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     socket.on('disconnect', function () {
         socketConnected = false;
-        setConnectionStatus(false, 'Polling');
+        setConnectionStatus(false, '轮询中');
         if (socketPollInterval) clearInterval(socketPollInterval);
     });
 
@@ -47,7 +65,7 @@ document.addEventListener('DOMContentLoaded', function () {
         socketConnected = false;
         reconnectAttempts++;
         if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-            setConnectionStatus(false, 'Polling');
+            setConnectionStatus(false, '轮询中');
         }
     });
 
@@ -91,7 +109,7 @@ function fetchStatusHttp() {
             if (!data) return;
             lastHttpOkAt = Date.now();
 
-            if (!socketConnected) setConnectionStatus(true, 'Polling');
+            if (!socketConnected) setConnectionStatus(true, '轮询中');
             handleStatusPayload(data);
         })
         .catch(() => {  });
@@ -108,7 +126,7 @@ function requestStatus() {
 function setConnectionStatus(online, overrideText) {
     const el = document.getElementById('connection-status');
     if (!el) return;
-    el.textContent = overrideText || (online ? 'Live' : 'Disconnected');
+    el.textContent = overrideText || (online ? '已连接' : '已断开');
     el.classList.toggle('is-online', !!online);
     el.classList.toggle('is-offline', !online);
 }
@@ -126,13 +144,18 @@ function classify(process) {
     return 'offline';
 }
 
+function formatStatus(status) {
+    if (!status) return '—';
+    return STATUS_LABELS[status] || status;
+}
+
 const STATUS_META = {
-    running: { label: 'RUNNING', dot: 'bg-green-500', badge: 'bg-green-100 text-green-700' },
-    warning: { label: 'RETRY', dot: 'bg-yellow-500', badge: 'bg-yellow-100 text-yellow-700' },
-    failed: { label: 'FAILED', dot: 'bg-red-500', badge: 'bg-red-100 text-red-700' },
-    paused: { label: 'PAUSED', dot: 'bg-slate-400', badge: 'bg-slate-100 text-slate-600' },
-    pending: { label: 'PENDING', dot: 'bg-blue-400', badge: 'bg-blue-100 text-blue-700' },
-    offline: { label: 'OFFLINE', dot: 'bg-slate-300', badge: 'bg-slate-100 text-slate-500' },
+    running: { label: '运行中', dot: 'bg-green-500', badge: 'bg-green-100 text-green-700' },
+    warning: { label: '重试中', dot: 'bg-yellow-500', badge: 'bg-yellow-100 text-yellow-700' },
+    failed: { label: '已失败', dot: 'bg-red-500', badge: 'bg-red-100 text-red-700' },
+    paused: { label: '已暂停', dot: 'bg-slate-400', badge: 'bg-slate-100 text-slate-600' },
+    pending: { label: '等待中', dot: 'bg-blue-400', badge: 'bg-blue-100 text-blue-700' },
+    offline: { label: '离线', dot: 'bg-slate-300', badge: 'bg-slate-100 text-slate-500' },
 };
 
 function renderDashboard(processes) {
@@ -151,7 +174,7 @@ function renderDashboard(processes) {
     setText('metric-running', running);
     setText('metric-offline', offline + paused);
     setText('metric-failed', failed);
-    setText('project-count-badge', `${sorted.length} project${sorted.length !== 1 ? 's' : ''}`);
+    setText('project-count-badge', `${sorted.length} 个项目`);
 
     const grid = document.getElementById('worker-grid');
     const empty = document.getElementById('worker-empty');
@@ -185,7 +208,7 @@ function buildCard(tpl, process) {
     node.querySelector('[data-role="name"]').textContent = process.name;
     node.querySelector('[data-role="uptime"]').textContent = process.uptime || '—';
     node.querySelector('[data-role="pid"]').textContent = process.pid || '—';
-    node.querySelector('[data-role="raw-status"]').textContent = process.status || '—';
+    node.querySelector('[data-role="raw-status"]').textContent = formatStatus(process.status);
     const cpuEl = node.querySelector('[data-role="cpu"]');
     if (cpuEl) {
         cpuEl.textContent = (process.cpu == null) ? '—' : `${process.cpu.toFixed(1)}%`;
@@ -206,48 +229,48 @@ function buildCard(tpl, process) {
 
     if (isAutoPaused) {
 
-        appendButton(topRow, 'Critical Stop', 'ctrl-danger', ICONS.stop,
-            () => confirmAction(`Clear failure state for ${name}?`, () => clearFailure(name)));
-        appendButton(topRow, 'Restart', '', ICONS.restart,
-            () => confirmAction(`Restart ${name}?`, () => action('restart', name)));
+        appendButton(topRow, '紧急停止', 'ctrl-danger', ICONS.stop,
+            () => confirmAction(`清除 ${name} 的失败状态？`, () => clearFailure(name)));
+        appendButton(topRow, '重启', '', ICONS.restart,
+            () => confirmAction(`重启 ${name}？`, () => action('restart', name)));
     } else if (isRunning && isDegraded) {
-        appendButton(topRow, 'Critical Stop', 'ctrl-danger', ICONS.stop,
-            () => confirmAction(`Stop ${name}?`, () => action('stop', name)));
-        appendButton(topRow, 'Restart', '', ICONS.restart,
-            () => confirmAction(`Restart ${name}?`, () => action('restart', name)));
+        appendButton(topRow, '紧急停止', 'ctrl-danger', ICONS.stop,
+            () => confirmAction(`停止 ${name}？`, () => action('stop', name)));
+        appendButton(topRow, '重启', '', ICONS.restart,
+            () => confirmAction(`重启 ${name}？`, () => action('restart', name)));
     } else if (isRunning) {
         if (isPaused) {
-            appendButton(topRow, 'Resume', 'ctrl-primary', ICONS.play, () => action('resume', name));
+            appendButton(topRow, '恢复', 'ctrl-primary', ICONS.play, () => action('resume', name));
         } else {
-            appendButton(topRow, 'Pause', '', ICONS.pause, () => action('pause', name));
+            appendButton(topRow, '暂停', '', ICONS.pause, () => action('pause', name));
         }
-        appendButton(topRow, 'Restart', '', ICONS.restart,
-            () => confirmAction(`Restart ${name}?`, () => action('restart', name)));
+        appendButton(topRow, '重启', '', ICONS.restart,
+            () => confirmAction(`重启 ${name}？`, () => action('restart', name)));
     } else {
-        appendButton(topRow, 'Start', 'ctrl-primary', ICONS.play, () => action('start', name));
-        appendButton(topRow, 'Restart', '', ICONS.restart, null, true);
+        appendButton(topRow, '启动', 'ctrl-primary', ICONS.play, () => action('start', name));
+        appendButton(topRow, '重启', '', ICONS.restart, null, true);
     }
 
     const midRow = document.createElement('div');
     midRow.className = 'ctrl-row';
     controls.appendChild(midRow);
-    appendButton(midRow, 'ReDeploy', '', ICONS.redeploy,
+    appendButton(midRow, '重新部署', '', ICONS.redeploy,
         () => showConfirm({
-            title: `Redeploy ${name}?`,
-            message: 'This will stop the service, wipe its workdir + venv cache, '
-                + 'git-pull the latest commit, reinstall dependencies from scratch, '
-                + 'and bring the service back up.\n\nThis action cannot be undone.',
-            okLabel: 'Redeploy',
+            title: `重新部署 ${name}？`,
+            message: '此操作将停止服务，清空工作目录与虚拟环境缓存，'
+                + '拉取最新提交，从头安装依赖，然后重新启动服务。\n\n'
+                + '此操作不可撤销。',
+            okLabel: '重新部署',
             variant: 'danger',
             icon: '⟳',
             onConfirm: () => redeploy(name),
         }));
-    appendButton(midRow, 'Stream Logs', '', ICONS.stream, () => streamLogs(name));
+    appendButton(midRow, '实时日志', '', ICONS.stream, () => streamLogs(name));
 
     const bottomRow = document.createElement('div');
     bottomRow.className = 'ctrl-row';
     controls.appendChild(bottomRow);
-    const logsLabel = 'Debug Logs';
+    const logsLabel = '调试日志';
     appendButton(bottomRow, logsLabel, 'ctrl-logs', ICONS.logs, () => viewLogs(name));
 
     return node;
@@ -334,7 +357,7 @@ function showConfirm(opts) {
     const modal = document.getElementById('confirm-modal');
     if (!modal) {
 
-        if (window.confirm(opts.message || 'Are you sure?')) {
+        if (window.confirm(opts.message || '确定要继续吗？')) {
             opts.onConfirm && opts.onConfirm();
         }
         return;
@@ -347,11 +370,11 @@ function showConfirm(opts) {
 
     const variant = opts.variant || 'default';
     modal.setAttribute('data-variant', variant);
-    titleEl.textContent = opts.title || 'Confirm action';
-    messageEl.textContent = opts.message || 'Are you sure?';
+    titleEl.textContent = opts.title || '确认操作';
+    messageEl.textContent = opts.message || '确定要继续吗？';
     iconEl.textContent = opts.icon || (variant === 'danger' ? '!' : variant === 'warning' ? '⚠' : '?');
-    okBtn.textContent = opts.okLabel || 'Confirm';
-    cancelBtn.textContent = opts.cancelLabel || 'Cancel';
+    okBtn.textContent = opts.okLabel || '确认';
+    cancelBtn.textContent = opts.cancelLabel || '取消';
 
     modal.classList.remove('hidden');
     modal.setAttribute('aria-hidden', 'false');
@@ -385,10 +408,10 @@ function action(verb, processName) {
             if (data.status === 'success') {
                 setTimeout(requestStatus, verb === 'restart' ? 2000 : 1000);
             } else {
-                alert(`Error: ${data.message || 'unknown error'}`);
+                alert(`错误：${data.message || '未知错误'}`);
             }
         })
-        .catch(() => alert(`Failed to ${verb} the process.`));
+        .catch(() => alert(`无法${ACTION_LABELS[verb] || verb}该进程。`));
 }
 
 function clearFailure(processName) {
@@ -396,9 +419,9 @@ function clearFailure(processName) {
         .then((r) => r.json())
         .then((data) => {
             if (data.status === 'success') setTimeout(requestStatus, 1500);
-            else alert(`Error: ${data.message || 'unknown error'}`);
+            else alert(`错误：${data.message || '未知错误'}`);
         })
-        .catch(() => alert('Failed to clear failure state.'));
+        .catch(() => alert('无法清除失败状态。'));
 }
 
 function viewLogs(processName) {
@@ -418,7 +441,7 @@ function viewLogs(processName) {
             window.URL.revokeObjectURL(url);
             document.body.removeChild(a);
         })
-        .catch(() => alert('Failed to fetch logs.'));
+        .catch(() => alert('无法获取日志。'));
 }
 
 function redeploy(processName) {
@@ -430,10 +453,10 @@ function redeploy(processName) {
             if (data.status === 'success') {
                 setTimeout(requestStatus, 1500);
             } else {
-                alert(`Redeploy failed: ${data.message || 'unknown error'}`);
+                alert(`重新部署失败：${data.message || '未知错误'}`);
             }
         })
-        .catch(() => alert('Failed to redeploy the process.'));
+        .catch(() => alert('无法重新部署该进程。'));
 }
 
 function streamLogs(processName) {

@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>{{ process_name }} · live logs</title>
+    <title>{{ process_name }} · 实时日志</title>
     <link rel="shortcut icon" href="{{ url_for('static', filename='images/cluster.svg') }}" type="image/svg+xml" />
     <style>
         :root {
@@ -173,21 +173,21 @@
         <div class="title">
             <span class="dot" id="status-dot"></span>
             <span class="name" id="proc-name">{{ process_name }}</span>
-            <span class="badge">live</span>
+            <span class="badge">实时</span>
         </div>
         <div class="toolbar">
-            <button type="button" id="btn-pause">Pause</button>
-            <button type="button" id="btn-clear">Clear</button>
-            <button type="button" id="btn-wrap" class="is-active">Wrap</button>
-            <a href="/service/log/{{ process_name }}">Download</a>
+            <button type="button" id="btn-pause">暂停</button>
+            <button type="button" id="btn-clear">清空</button>
+            <button type="button" id="btn-wrap" class="is-active">自动换行</button>
+            <a href="/service/log/{{ process_name }}">下载</a>
         </div>
     </header>
 
     <main id="log-body" aria-live="polite"></main>
 
     <footer>
-        <span id="line-count">0 lines</span>
-        <span id="conn-state">connecting…</span>
+        <span id="line-count">0 行</span>
+        <span id="conn-state">连接中…</span>
     </footer>
 
     <script>
@@ -213,7 +213,7 @@
             body.appendChild(line);
             body.appendChild(document.createTextNode('\n'));
             count += 1;
-            lineCount.textContent = count + ' line' + (count === 1 ? '' : 's');
+            lineCount.textContent = count + ' 行';
             if (!paused) body.scrollTop = body.scrollHeight;
         }
 
@@ -224,26 +224,26 @@
 
         function open() {
             if (es) { try { es.close(); } catch (_) { } }
-            setConn('connecting…');
+            setConn('连接中…');
             appendLine('$ tail -f /var/log/s6/' + procName + '/current', 'sys');
             es = new EventSource('/service/stream/' + encodeURIComponent(procName));
-            es.onopen = () => setConn('streaming');
+            es.onopen = () => setConn('推流中');
             es.onmessage = (ev) => appendLine(ev.data);
             es.onerror = () => {
-                setConn('disconnected — retrying…', true);
+                setConn('已断开 — 正在重试…', true);
             };
         }
 
         btnPause.addEventListener('click', () => {
             paused = !paused;
-            btnPause.textContent = paused ? 'Resume' : 'Pause';
+            btnPause.textContent = paused ? '继续' : '暂停';
             btnPause.classList.toggle('is-active', paused);
             if (!paused) body.scrollTop = body.scrollHeight;
         });
         btnClear.addEventListener('click', () => {
             body.innerHTML = '';
             count = 0;
-            lineCount.textContent = '0 lines';
+            lineCount.textContent = '0 行';
         });
         btnWrap.addEventListener('click', () => {
             const on = btnWrap.classList.toggle('is-active');
@@ -253,7 +253,7 @@
             if (es) { try { es.close(); } catch (_) { } }
         });
 
-        document.title = procName + ' · live logs';
+        document.title = procName + ' · 实时日志';
         open();
         }) ();
     </script>

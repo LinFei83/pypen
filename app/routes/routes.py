@@ -101,7 +101,7 @@ def _run_cmd(cmd: list[str], timeout: int = 30, quiet: bool = False) -> dict:
             return {"status": "success", "message": result.stdout.strip()}
         return {"status": "error", "message": (result.stderr or result.stdout).strip()}
     except subprocess.TimeoutExpired:
-        return {"status": "error", "message": f"Command timed out after {timeout} seconds"}
+        return {"status": "error", "message": f"命令在 {timeout} 秒后超时"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -238,7 +238,7 @@ def s6_rescan() -> None:
 def s6_svc(flag: str, process_name: str) -> dict:
     svc = _svc_path(process_name)
     if not svc.is_dir():
-        return {"status": "error", "message": f"Service {process_name} not found"}
+        return {"status": "error", "message": f"未找到服务 {process_name}"}
     return _run_cmd(["s6-svc", flag, str(svc)], timeout=10)
 
 def is_process_paused(pid) -> bool:
@@ -266,7 +266,7 @@ def pause_process(process_name: str) -> dict:
     except Exception as exc:
         logger.debug(f"pause_process({process_name}) pkill failed: {exc}")
     if result["status"] == "success":
-        return {"status": "success", "message": f"Paused process {process_name}"}
+        return {"status": "success", "message": f"已暂停进程 {process_name}"}
     return {"status": "error", "message": result["message"]}
 
 def resume_process(process_name: str) -> dict:
@@ -283,7 +283,7 @@ def resume_process(process_name: str) -> dict:
     except Exception as exc:
         logger.debug(f"resume_process({process_name}) pkill failed: {exc}")
     if result["status"] == "success":
-        return {"status": "success", "message": f"Resumed process {process_name}"}
+        return {"status": "success", "message": f"已恢复进程 {process_name}"}
     return {"status": "error", "message": result["message"]}
 
 async def broadcast_status_update() -> bool:
@@ -399,7 +399,7 @@ async def login():
             session['logged_in'] = True
             return redirect(url_for('cluster'))
         else:
-            await flash('Invalid credentials. Please try again.')
+            await flash('用户名或密码不正确，请重试。')
 
     return await render_template('login.html')
 
@@ -421,7 +421,7 @@ async def list_service_processes():
 async def pause_service_process(process_name):
     logger.info(f"Received pause request for process: {process_name}")
     if not _VALID_NAME_RE.match(process_name):
-        return jsonify({"status": "error", "message": "Invalid process name"}), 400
+        return jsonify({"status": "error", "message": "无效的进程名称"}), 400
     result = pause_process(process_name)
     if result["status"] == "success":
         await broadcast_status_update()
@@ -432,7 +432,7 @@ async def pause_service_process(process_name):
 async def resume_service_process(process_name):
     logger.info(f"Received resume request for process: {process_name}")
     if not _VALID_NAME_RE.match(process_name):
-        return jsonify({"status": "error", "message": "Invalid process name"}), 400
+        return jsonify({"status": "error", "message": "无效的进程名称"}), 400
     result = resume_process(process_name)
     if result["status"] == "success":
         await broadcast_status_update()
@@ -501,16 +501,16 @@ async def manage_service_process(action, process_name):
     logger.info(f"Received {action} request for process: {process_name}")
 
     if action not in ("start", "stop", "restart"):
-        return jsonify({"status": "error", "message": "Invalid action"}), 400
+        return jsonify({"status": "error", "message": "无效的操作"}), 400
 
     if not _VALID_NAME_RE.match(process_name):
-        return jsonify({"status": "error", "message": "Invalid process name"}), 400
+        return jsonify({"status": "error", "message": "无效的进程名称"}), 400
 
     parsed = s6_svstat(process_name)
     if parsed is None and action != "start":
         return jsonify({
             "status": "error",
-            "message": f"Process {process_name} not found"
+            "message": f"未找到进程 {process_name}"
         }), 404
 
     try:
@@ -518,7 +518,7 @@ async def manage_service_process(action, process_name):
             if parsed["status"] != "RUNNING":
                 return jsonify({
                     "status": "error",
-                    "message": f"Process {process_name} is not running"
+                    "message": f"进程 {process_name} 未在运行"
                 }), 400
 
             result = _run_cmd(
@@ -535,7 +535,7 @@ async def manage_service_process(action, process_name):
             if not _restore_run(process_name) and not (_svc_path(process_name) / "run").exists():
                 return jsonify({
                     "status": "error",
-                    "message": f"Service {process_name} has no run script"
+                    "message": f"服务 {process_name} 没有运行脚本"
                 }), 404
             update_process_code(process_name)
             s6_rescan()
@@ -554,35 +554,34 @@ async def manage_service_process(action, process_name):
 
         if await _wait_for_status(process_name, expected):
             await broadcast_status_update()
-            if action == "stop":
-                msg = f"Successfully stopped {process_name}"
-            else:
-                msg = f"Successfully {action}ed {process_name}"
+            action_labels = {"start": "启动", "stop": "停止", "restart": "重启"}
+            label = action_labels.get(action, action)
+            msg = f"已成功{label} {process_name}"
             return jsonify({"status": "success", "message": msg}), 200
 
         return jsonify({
             "status": "error",
-            "message": f"Process did not reach expected state after {action}"
+            "message": f"执行「{action}」后进程未达到预期状态"
         }), 500
 
     except Exception as e:
         logger.error(f"Error managing process {process_name}: {str(e)}")
         return jsonify({
             "status": "error",
-            "message": f"Error managing process: {str(e)}"
+            "message": f"管理进程时出错：{str(e)}"
         }), 500
 
 @app.route('/service/log/<process_name>', methods=['GET'])
 async def download_service_log(process_name):
     try:
         if not _VALID_NAME_RE.match(process_name):
-            return jsonify({"status": "error", "message": "Invalid process name"}), 400
+            return jsonify({"status": "error", "message": "无效的进程名称"}), 400
 
         log_file = Path(S6_LOG_DIR) / _slug(process_name) / "current"
         if not log_file.exists():
             return jsonify({
                 "status": "error",
-                "message": "No log file found for this process"
+                "message": "未找到该进程的日志文件"
             }), 404
 
         try:
@@ -629,7 +628,7 @@ async def handle_error(e):
     logger.error(f"Unhandled error [{req_info}]: {str(e)}")
     return jsonify({
         "status": "error",
-        "message": "An internal server error occurred"
+        "message": "服务器内部错误"
     }), 500
 
 def delete_service_logs(process_name: str) -> None:
@@ -706,12 +705,12 @@ def thoroughly_cleanup(process_name: str) -> None:
 @login_required
 async def clear_failure(process_name):
     if not _VALID_NAME_RE.match(process_name):
-        return jsonify({"status": "error", "message": "Invalid process name"}), 400
+        return jsonify({"status": "error", "message": "无效的进程名称"}), 400
     FAILURE_COUNTS[process_name] = 0
     PAUSED_BY_SYSTEM.discard(process_name)
     s6_svc("-u", process_name)
     await broadcast_status_update()
-    return jsonify({"status": "success", "message": f"Cleared failure state for {process_name}"})
+    return jsonify({"status": "success", "message": f"已清除 {process_name} 的失败状态"})
 
 def _find_project_config(process_name: str) -> dict | None:
     try:
@@ -808,17 +807,17 @@ def _redeploy_blocking(process_name: str, project: dict) -> None:
 async def redeploy_service(process_name):
     logger.info(f"Received redeploy request for process: {process_name}")
     if not _VALID_NAME_RE.match(process_name):
-        return jsonify({"status": "error", "message": "Invalid process name"}), 400
+        return jsonify({"status": "error", "message": "无效的进程名称"}), 400
 
     parsed = s6_svstat(process_name)
     if parsed is None:
-        return jsonify({"status": "error", "message": f"Service {process_name} not found"}), 404
+        return jsonify({"status": "error", "message": f"未找到服务 {process_name}"}), 404
 
     project = _find_project_config(process_name)
     if project is None:
         return jsonify({
             "status": "error",
-            "message": f"No project.toml entry matches {process_name}",
+            "message": f"project.toml 中没有与 {process_name} 匹配的条目",
         }), 404
 
     try:
@@ -846,11 +845,11 @@ async def redeploy_service(process_name):
             await broadcast_status_update()
             return jsonify({
                 "status": "success",
-                "message": f"Redeployed {process_name}",
+                "message": f"已重新部署 {process_name}",
             }), 200
         return jsonify({
             "status": "error",
-            "message": "Service did not reach RUNNING state after redeploy",
+            "message": "重新部署后服务未进入运行状态",
         }), 500
     except Exception as e:
         logger.exception(f"Redeploy failed for {process_name}: {e}")
@@ -860,24 +859,24 @@ async def redeploy_service(process_name):
 @login_required
 async def stream_log_page(process_name):
     if not _VALID_NAME_RE.match(process_name):
-        return jsonify({"status": "error", "message": "Invalid process name"}), 400
+        return jsonify({"status": "error", "message": "无效的进程名称"}), 400
     return await render_template("log_stream.html", process_name=process_name)
 
 @app.route('/service/stream/<process_name>')
 @login_required
 async def stream_service_log(process_name):
     if not _VALID_NAME_RE.match(process_name):
-        return jsonify({"status": "error", "message": "Invalid process name"}), 400
+        return jsonify({"status": "error", "message": "无效的进程名称"}), 400
 
     log_file = Path(S6_LOG_DIR) / _slug(process_name) / "current"
 
     async def _tail():
 
-        yield f"data: [stream] connected to {process_name}\n\n"
+        yield f"data: [stream] 已连接到 {process_name}\n\n"
         if not log_file.exists():
-            yield f"data: [stream] waiting for {log_file} to appear…\n\n"
+            yield f"data: [stream] 等待日志文件 {log_file} 出现…\n\n"
         else:
-            yield f"data: [stream] tailing {log_file}\n\n"
+            yield f"data: [stream] 正在跟踪 {log_file}\n\n"
 
         fh = None
         inode = None
@@ -922,7 +921,7 @@ async def stream_service_log(process_name):
                     logger.warning(
                         f"stream_service_log({process_name}) tail error: {exc}"
                     )
-                    yield f"data: [stream] error: {exc}\n\n"
+                    yield f"data: [stream] 错误：{exc}\n\n"
                     if fh is not None:
                         try:
                             fh.close()
