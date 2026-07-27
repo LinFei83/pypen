@@ -28,9 +28,9 @@
             }
         };
     </script>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/cluster.css') }}?v=8" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/cluster.css') }}?v=9" />
     <script defer src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-    <script defer src="{{ url_for('static', filename='js/cluster.js') }}?v=9"></script>
+    <script defer src="{{ url_for('static', filename='js/cluster.js') }}?v=10"></script>
 </head>
 
 <body class="bg-dashboard-bg min-h-screen font-sans text-slate-900">
@@ -231,7 +231,7 @@
                 </label>
                 <label class="pf-field">
                     <span>运行命令 run_command</span>
-                    <input type="text" id="pf-run" required placeholder="venv/bin/python bot.py" />
+                    <input type="text" id="pf-run" required placeholder=".venv/bin/python main.py" />
                 </label>
                 <label class="pf-field">
                     <span>日志大小 logs_size</span>
@@ -255,7 +255,7 @@
                     <label><input type="checkbox" id="pf-pull" /> 启停时自动 git pull</label>
                     <label><input type="checkbox" id="pf-redeploy" /> 定时任务同步代码后重启</label>
                 </div>
-                <p class="pf-hint">保存后立即写回 project.toml 并注册 s6，无需重启 Docker。</p>
+                <p class="pf-hint">保存后立即写回 project.toml 并注册 s6，无需重启 Docker。推荐填 <code>.venv/bin/python …</code>（勿用宿主机绝对路径；勿用未加 <code>--no-sync</code> 的 <code>uv run</code>）。</p>
                 <div class="confirm-actions">
                     <button type="button" class="confirm-btn confirm-cancel" id="project-form-cancel">取消</button>
                     <button type="submit" class="confirm-btn confirm-ok" id="project-form-ok">保存并启用</button>

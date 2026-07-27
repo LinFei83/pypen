@@ -55,6 +55,10 @@ services:
       - ./project.toml:/app/project.toml
       # 本地项目目录：宿主机 ./projects/<id> → 容器 /app/projects/<id>
       - ./projects:/app/projects
+      # 复用宿主机 uv 解释器与包缓存，使宿主机建好的 .venv 在容器内可直接用，避免二次下载
+      # 若本机 uv 不在默认路径，可覆盖：UV_SHARE_DIR / UV_CACHE_DIR
+      - ${UV_SHARE_DIR:-${HOME}/.local/share/uv}:/root/.local/share/uv
+      - ${UV_CACHE_DIR:-${HOME}/.cache/uv}:/root/.cache/uv
       # worker 日志持久化
       - pypen-logs:/var/log/s6
     # 健康检查：仪表盘端口已监听即可（不依赖登录页 HTTP 状态）

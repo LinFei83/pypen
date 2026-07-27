@@ -54,9 +54,11 @@ branch = "main"
 # 对应目录：projects/mybot/
 id          = "mybot"
 
-# 在 projects/mybot/ 下执行的命令（原样写入 s6，请自行写好解释器路径）。
-# 例如：venv/bin/python bot.py   或   bash start.sh
-run_command = "venv/bin/python bot.py"
+# 在 projects/mybot/ 下执行的命令（原样写入 s6；勿写宿主机绝对路径）。
+# 推荐：.venv/bin/python bot.py（宿主机 uv sync 后，compose 已挂载 uv 解释器/缓存，容器可直接复用）
+# 若用 uv run，务必加 --no-sync，例如：uv run --no-sync python bot.py
+# 不要单独写 uv run ...（默认会 sync，可能再次装依赖）
+run_command = ".venv/bin/python bot.py"
 
 # 按项目的日志轮转阈值。默认："10M"。
 logs_size   = "10M"
