@@ -27,10 +27,6 @@
 # 在 worker 启动时安装一次的系统包（通过主机包管理器，如 dnf/apt）。
 dnf_packages = ["ffmpeg", "aria2"]
 
-# Web 仪表盘登录凭据。任一为空时，仪表盘将拒绝登录。
-username = "admin"
-password = "change-me"
-
 # 是否启用保活 ping 服务。
 ping = true
 ping_url = ""

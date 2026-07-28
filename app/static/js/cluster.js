@@ -517,13 +517,7 @@ function initProjectManager() {
 function loadProjects() {
     const empty = document.getElementById('project-manager-empty');
     fetch('/api/projects', { headers: { Accept: 'application/json' } })
-        .then((r) => {
-            if (r.status === 401) {
-                window.location.href = '/login';
-                return null;
-            }
-            return r.json();
-        })
+        .then((r) => r.json())
         .then((data) => {
             if (!data || data.status !== 'success') {
                 if (empty) empty.textContent = '无法加载项目列表。';

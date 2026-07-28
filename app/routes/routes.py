@@ -6,7 +6,6 @@ import sys
 import asyncio
 import time
 from datetime import datetime
-from functools import wraps
 from pathlib import Path
 from collections import defaultdict, deque
 
@@ -23,8 +22,7 @@ else:
 from app import app, sio
 from app.utils.logging_config import logger
 from quart import (
-    render_template, request, jsonify,
-    redirect, url_for, session, flash, Response,
+    render_template, request, jsonify, Response,
 )
 from werkzeug.exceptions import HTTPException
 
@@ -403,47 +401,6 @@ def _git_pull_workdir(process_name: str, workdir: Path) -> None:
     detail = (result.stderr or result.stdout or "").strip() or f"exit {result.returncode}"
     raise RuntimeError(f"git pull 失败（{process_name}）：{detail}")
 
-users = {
-    "admin": "password123",
-    "newuser": "newpassword"
-}
-
-def _dashboard_credentials() -> dict[str, str]:
-    creds = dict(users)
-    try:
-        with CONFIG_FILE.open("rb") as fh:
-            raw = tomllib.load(fh)
-    except (FileNotFoundError, tomllib.TOMLDecodeError):
-        return creds
-
-    defaults = raw.get("defaults") or {}
-    if not isinstance(defaults, dict):
-        return creds
-
-    username = str(defaults.get("username") or "").strip()
-    password = str(defaults.get("password") or "")
-    if not username or not password:
-        return creds
-
-    creds = {username: password}
-    return creds
-
-def login_required(f):
-    @wraps(f)
-    async def decorated_function(*args, **kwargs):
-        if 'logged_in' not in session:
-            return redirect(url_for('login'))
-        return await f(*args, **kwargs)
-    return decorated_function
-
-def api_login_required(f):
-    @wraps(f)
-    async def decorated_function(*args, **kwargs):
-        if 'logged_in' not in session:
-            return jsonify({"status": "error", "message": "未登录"}), 401
-        return await f(*args, **kwargs)
-    return decorated_function
-
 _PROJECT_CFG_LOCK: asyncio.Lock | None = None
 
 def _project_cfg_lock() -> asyncio.Lock:
@@ -452,29 +409,7 @@ def _project_cfg_lock() -> asyncio.Lock:
         _PROJECT_CFG_LOCK = asyncio.Lock()
     return _PROJECT_CFG_LOCK
 
-@app.route('/login', methods=['GET', 'POST'])
-async def login():
-    if request.method == 'POST':
-        form = await request.form
-        username = form['username']
-        password = form['password']
-
-        creds = _dashboard_credentials()
-        if username in creds and creds[username] == password:
-            session['logged_in'] = True
-            return redirect(url_for('cluster'))
-        else:
-            await flash('用户名或密码不正确，请重试。')
-
-    return await render_template('login.html')
-
-@app.route('/logout')
-async def logout():
-    session.pop('logged_in', None)
-    return redirect(url_for('login'))
-
 @app.route('/')
-@login_required
 async def cluster():
     return await render_template('cluster.html')
 
@@ -807,7 +742,6 @@ def thoroughly_cleanup(process_name: str) -> None:
                     (Path(root) / f).unlink()
 
 @app.route('/service/clear_failure/<process_name>', methods=['POST'])
-@login_required
 async def clear_failure(process_name):
     if not _VALID_NAME_RE.match(process_name):
         return jsonify({"status": "error", "message": "无效的进程名称"}), 400
@@ -847,7 +781,6 @@ def _redeploy_blocking(process_name: str, project: dict | None = None) -> None:
     _git_pull_workdir(process_name, workdir)
 
 @app.route('/service/redeploy/<process_name>', methods=['POST'])
-@login_required
 async def redeploy_service(process_name):
     logger.info(f"Received sync-code request for process: {process_name}")
     if not _VALID_NAME_RE.match(process_name):
@@ -899,14 +832,12 @@ async def redeploy_service(process_name):
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/service/stream-view/<process_name>')
-@login_required
 async def stream_log_page(process_name):
     if not _VALID_NAME_RE.match(process_name):
         return jsonify({"status": "error", "message": "无效的进程名称"}), 400
     return await render_template("log_stream.html", process_name=process_name)
 
 @app.route('/service/stream/<process_name>')
-@login_required
 async def stream_service_log(process_name):
     if not _VALID_NAME_RE.match(process_name):
         return jsonify({"status": "error", "message": "无效的进程名称"}), 400
@@ -1036,7 +967,6 @@ async def _unapply_project_service(project_id: str) -> None:
     s6_rescan()
 
 @app.route("/api/projects", methods=["GET"])
-@api_login_required
 async def api_list_projects():
     from worker.toml_store import list_project_dirs, read_raw_projects
 
@@ -1084,7 +1014,6 @@ async def api_list_projects():
     return jsonify({"status": "success", "projects": items})
 
 @app.route("/api/projects", methods=["POST"])
-@api_login_required
 async def api_create_project():
     from worker.toml_store import upsert_project, validate_entry
     from app.cron import reload_cron_tasks
@@ -1112,7 +1041,6 @@ async def api_create_project():
     })
 
 @app.route("/api/projects/<project_id>", methods=["PUT"])
-@api_login_required
 async def api_update_project(project_id):
     from worker.toml_store import read_raw_projects, upsert_project, validate_entry
     from app.cron import reload_cron_tasks
@@ -1149,7 +1077,6 @@ async def api_update_project(project_id):
     })
 
 @app.route("/api/projects/<project_id>", methods=["DELETE"])
-@api_login_required
 async def api_delete_project(project_id):
     from worker.toml_store import remove_project
     from app.cron import reload_cron_tasks
