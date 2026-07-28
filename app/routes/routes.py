@@ -131,7 +131,8 @@ def s6_svstat(process_name: str) -> dict | None:
     else:
         status = "UNKNOWN"
 
-    paused = bool(pid) and is_process_paused(pid)
+    # s6-svstat 在 SIGSTOP 时会带 ", paused"；同时用 /proc State 兜底
+    paused = (", paused" in line) or (bool(pid) and is_process_paused(pid))
 
     hours, rem = divmod(uptime_seconds, 3600)
     minutes, secs = divmod(rem, 60)

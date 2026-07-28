@@ -209,7 +209,8 @@ function buildCard(tpl, process) {
     node.querySelector('[data-role="name"]').textContent = process.name;
     node.querySelector('[data-role="uptime"]').textContent = process.uptime || '—';
     node.querySelector('[data-role="pid"]').textContent = process.pid || '—';
-    node.querySelector('[data-role="raw-status"]').textContent = formatStatus(process.status);
+    // 与角标一致：暂停时 status 仍为 RUNNING，展示应用层状态而非原始 s6 状态
+    node.querySelector('[data-role="raw-status"]').textContent = meta.label;
     const cpuEl = node.querySelector('[data-role="cpu"]');
     if (cpuEl) {
         cpuEl.textContent = (process.cpu == null) ? '—' : `${process.cpu.toFixed(1)}%`;
@@ -407,6 +408,14 @@ function action(verb, processName) {
         .then((r) => r.json())
         .then((data) => {
             if (data.status === 'success') {
+                // 暂停/恢复：乐观更新卡片，避免轮询前仍显示「运行中」
+                if (verb === 'pause' || verb === 'resume') {
+                    lastKnownProcesses = lastKnownProcesses.map((p) => {
+                        if (p.name !== processName) return p;
+                        return { ...p, paused: verb === 'pause' };
+                    });
+                    renderDashboard(lastKnownProcesses);
+                }
                 const delay = verb === 'restart' ? 2000 : 1000;
                 setTimeout(requestStatus, delay);
                 setTimeout(fetchStatusHttp, delay);
