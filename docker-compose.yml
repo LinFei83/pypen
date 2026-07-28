@@ -52,6 +52,7 @@ services:
       NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,host.docker.internal}
       # 本机一般不需要保活；若 project.toml 里 ping=true 且仍要 ping，可取消下行注释
       # APP_URL: "http://localhost:5000"
+      TZ: Asia/Shanghai
     volumes:
       # 业务配置（已在 .gitignore，勿提交密钥；可写以便仪表盘热登记项目）
       - ./project.toml:/app/project.toml
