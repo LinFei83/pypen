@@ -407,7 +407,9 @@ function action(verb, processName) {
         .then((r) => r.json())
         .then((data) => {
             if (data.status === 'success') {
-                setTimeout(requestStatus, verb === 'restart' ? 2000 : 1000);
+                const delay = verb === 'restart' ? 2000 : 1000;
+                setTimeout(requestStatus, delay);
+                setTimeout(fetchStatusHttp, delay);
             } else {
                 alert(`错误：${data.message || '未知错误'}`);
             }
@@ -707,6 +709,9 @@ function unregisterProject(projectId) {
                 alert(data.message || '取消登记失败');
                 return;
             }
+            // 乐观移除设备卡片，避免后端残留目录时短暂闪回
+            lastKnownProcesses = lastKnownProcesses.filter((p) => p.name !== projectId);
+            renderDashboard(lastKnownProcesses);
             loadProjects();
             setTimeout(requestStatus, 800);
             setTimeout(fetchStatusHttp, 800);

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import os
+import shutil
 import stat
+import subprocess
+import time
+from pathlib import Path
 from typing import Any
 
 from app.utils.logging_config import logger
@@ -55,6 +59,177 @@ def _format_exports(env: dict[str, str] | None) -> str:
         lines.append(f"export {key}='{safe}'")
     return "\n".join(lines) + "\n"
 
+def _s6_svc_quiet(flag: str, target: Path, timeout: int = 10) -> None:
+    """对服务或其 log/ 子服务发送 s6-svc 信号，忽略失败。"""
+    if not target.is_dir():
+        return
+    try:
+        subprocess.run(
+            ["s6-svc", flag, str(target)],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        logger.debug(f"s6-svc {flag} {target} failed: {exc}")
+
+def _purge_dir(path: Path) -> bool:
+    """强制删除目录；成功返回 True。"""
+    if not path.exists():
+        return True
+    try:
+        shutil.rmtree(path, ignore_errors=True)
+    except OSError as exc:
+        logger.warning(f"shutil.rmtree({path}) failed: {exc}")
+    if path.exists():
+        # 兜底：逐个删文件/目录（含 FIFO）
+        for child in sorted(path.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+            try:
+                if child.is_dir() and not child.is_symlink():
+                    child.rmdir()
+                else:
+                    child.unlink(missing_ok=True)
+            except OSError:
+                pass
+        try:
+            path.rmdir()
+        except OSError:
+            pass
+    ok = not path.exists()
+    if not ok:
+        logger.error(f"Failed to fully remove service directory: {path}")
+    return ok
+
+def _kill_project_orphans(slug: str) -> None:
+    """按项目工作目录清理残留进程（argv 不一定含路径）。"""
+    workdir = (PROJECTS_DIR / slug).resolve()
+    workdir_s = str(workdir)
+    try:
+        subprocess.run(
+            ["pkill", "-9", "-f", workdir_s],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+    try:
+        for proc_dir in Path("/proc").iterdir():
+            if not proc_dir.name.isdigit():
+                continue
+            try:
+                cwd = (proc_dir / "cwd").resolve()
+            except OSError:
+                continue
+            if str(cwd) != workdir_s and not str(cwd).startswith(workdir_s + "/"):
+                continue
+            try:
+                pid = int(proc_dir.name)
+                if pid == os.getpid():
+                    continue
+                os.kill(pid, 9)
+            except (OSError, ValueError):
+                pass
+    except OSError:
+        pass
+
+def teardown_service(slug: str, *, wait_seconds: float = 3.0) -> bool:
+    """停主服务与 log、退出 supervise，再删除目录。
+
+    必须先 -d/-wD 再 -x，否则 supervise 仍占用 FIFO，目录删不干净，
+    下次 write_service 会复用僵死的 supervise/，导致 s6-svstat 一直失败、
+    UI 显示「等待中」。
+    """
+    service_dir = S6_SERVICE_DIR / slug
+    if not service_dir.exists():
+        _kill_project_orphans(slug)
+        _release_log_lock(slug)
+        return True
+
+    log_svc = service_dir / "log"
+
+    # 先停主服务，再停 log（主服务 stdout 依赖 log）
+    _s6_svc_quiet("-wD", service_dir, timeout=15)
+    _s6_svc_quiet("-d", service_dir)
+    _s6_svc_quiet("-wD", log_svc, timeout=10)
+    _s6_svc_quiet("-d", log_svc)
+
+    # 退出 supervise，释放 supervise/ 下的 FIFO
+    _s6_svc_quiet("-x", log_svc)
+    _s6_svc_quiet("-x", service_dir)
+
+    deadline = time.monotonic() + wait_seconds
+    while time.monotonic() < deadline:
+        still = _supervise_pids(slug)
+        if not still:
+            break
+        time.sleep(0.2)
+    else:
+        # 超时则强杀残留 supervise / s6-log
+        for pid in _supervise_pids(slug):
+            try:
+                os.kill(pid, 9)
+            except OSError:
+                pass
+        time.sleep(0.2)
+
+    _kill_project_orphans(slug)
+    ok = _purge_dir(service_dir)
+    _release_log_lock(slug)
+    if ok:
+        logger.info(f"Removed s6 service directory for {slug}.")
+    return ok
+
+def _supervise_pids(slug: str) -> list[int]:
+    """查找仍在管理该服务的 s6-supervise / s6-log 进程。"""
+    pids: list[int] = []
+    needle = f"/etc/s6/services/{slug}"
+    log_needle = str(S6_LOG_DIR / slug)
+    try:
+        out = subprocess.run(
+            ["ps", "-eo", "pid,args"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        ).stdout or ""
+    except (subprocess.TimeoutExpired, OSError):
+        return pids
+    for line in out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if "s6-supervise" in line and (needle in line or line.endswith(f" {slug}") or line.endswith(f" {slug}/log")):
+            try:
+                pids.append(int(line.split(None, 1)[0]))
+            except ValueError:
+                pass
+        elif "s6-log" in line and log_needle in line:
+            try:
+                pids.append(int(line.split(None, 1)[0]))
+            except ValueError:
+                pass
+    return pids
+
+def _release_log_lock(slug: str) -> None:
+    """释放 volume 上残留的 s6-log lock，避免下次启动 Resource busy。"""
+    log_dir = S6_LOG_DIR / slug
+    lock = log_dir / "lock"
+    if not lock.exists():
+        return
+    # 若仍有进程占用则先杀
+    for pid in _supervise_pids(slug):
+        try:
+            os.kill(pid, 9)
+        except OSError:
+            pass
+    try:
+        lock.unlink(missing_ok=True)
+    except OSError as exc:
+        logger.debug(f"Could not remove log lock {lock}: {exc}")
+
 def write_service(cluster: dict[str, Any], command: str) -> None:
     slug = cluster["project_number"].replace(" ", "_")
     service_dir = S6_SERVICE_DIR / slug
@@ -66,6 +241,21 @@ def write_service(cluster: dict[str, Any], command: str) -> None:
         f"Writing s6 service for {cluster['project_number']} at {service_dir} "
         f"(log rotation @ {size_bytes} bytes)"
     )
+
+    # 若目录已存在（含僵死 supervise/），先彻底卸掉再写，避免 PENDING 假状态
+    if service_dir.exists():
+        teardown_service(slug)
+        # 通知 svscan 目录已消失，避免紧接着重建时出现双 supervise
+        try:
+            subprocess.run(
+                ["s6-svscanctl", "-a", str(S6_SERVICE_DIR)],
+                capture_output=True,
+                timeout=5,
+                check=False,
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+        time.sleep(0.3)
 
     service_dir.mkdir(parents=True, exist_ok=True)
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -101,25 +291,5 @@ def write_service(cluster: dict[str, Any], command: str) -> None:
     logger.info(f"s6 service for {cluster['project_number']} written successfully.")
 
 def remove_service(slug: str) -> None:
-    service_dir = S6_SERVICE_DIR / slug
-    if not service_dir.exists():
-        return
-    for child in service_dir.rglob("*"):
-        try:
-            if child.is_file() or child.is_symlink():
-                child.unlink()
-        except OSError:
-            pass
-    for child in sorted(
-        service_dir.rglob("*"), key=lambda p: len(p.parts), reverse=True
-    ):
-        try:
-            if child.is_dir():
-                child.rmdir()
-        except OSError:
-            pass
-    try:
-        service_dir.rmdir()
-    except OSError:
-        pass
-    logger.info(f"Removed s6 service directory for {slug}.")
+    """兼容旧调用点：完整 teardown（停服 + 退 supervise + 删目录）。"""
+    teardown_service(slug)

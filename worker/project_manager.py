@@ -9,11 +9,9 @@ from typing import Any
 from app.utils.logging_config import logger
 
 from .constants import PROJECTS_DIR, S6_SERVICE_DIR
-from .s6_config import remove_service, write_service
+from .s6_config import teardown_service, write_service
 from .s6_svc import (
-    async_s6_svc,
     rescan_services,
-    wait_for_process_stop,
 )
 
 def _project_dir(cluster: dict[str, Any]) -> Path:
@@ -84,27 +82,22 @@ async def start_project(cluster: dict[str, Any]) -> None:
 async def stop_project(project_number: str) -> None:
     logger.info(f"Stopping project: {project_number}")
     slug = project_number.replace(" ", "_")
-
-    await async_s6_svc("-d", slug)
-    if not await wait_for_process_stop(slug):
-        logger.warning(f"Process {slug} did not stop within timeout.")
-
-    remove_service(slug)
+    # teardown 会 -d/-x 并删目录；在线程中跑以免阻塞事件循环
+    await asyncio.get_event_loop().run_in_executor(None, teardown_service, slug)
 
 async def cleanup_existing_projects() -> None:
     if not S6_SERVICE_DIR.exists():
         S6_SERVICE_DIR.mkdir(parents=True, exist_ok=True)
         return
 
-    for service_dir in S6_SERVICE_DIR.iterdir():
+    for service_dir in list(S6_SERVICE_DIR.iterdir()):
         if not service_dir.is_dir():
             continue
 
         if service_dir.name.startswith("."):
             continue
         slug = service_dir.name
-        await async_s6_svc("-d", slug)
-        remove_service(slug)
+        await asyncio.get_event_loop().run_in_executor(None, teardown_service, slug)
         logger.info(f"Cleaned up s6 service: {slug}")
     await rescan_services()
 

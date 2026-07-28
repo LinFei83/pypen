@@ -1,8 +1,10 @@
 import os
+import shutil
 import subprocess
 import re
 import sys
 import asyncio
+import time
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
@@ -189,26 +191,58 @@ def _placeholder_for(raw_id: str) -> dict:
         "cpu_history": [],
     }
 
+_HEAL_COOLDOWN: dict[str, float] = {}
+_HEAL_COOLDOWN_SEC = 30.0
+
+def _heal_stale_supervise(process_name: str, *, force: bool = False) -> dict | None:
+    """僵死 supervise/ 会导致 svstat 失败却仍有日志。删掉 supervise 后 rescan 重建。"""
+    svc = _svc_path(process_name)
+    supervise = svc / "supervise"
+    if not svc.is_dir() or not supervise.exists():
+        return None
+    now = time.monotonic()
+    last = _HEAL_COOLDOWN.get(process_name, 0.0)
+    if not force and now - last < _HEAL_COOLDOWN_SEC:
+        return None
+    _HEAL_COOLDOWN[process_name] = now
+    logger.warning(f"Healing stale supervise for {process_name}")
+    _run_cmd(["s6-svc", "-x", str(svc)], timeout=5, quiet=True)
+    log_svc = svc / "log"
+    if log_svc.is_dir():
+        _run_cmd(["s6-svc", "-x", str(log_svc)], timeout=5, quiet=True)
+    for stale in (log_svc / "supervise", supervise):
+        if stale.exists():
+            shutil.rmtree(stale, ignore_errors=True)
+    s6_rescan()
+    return s6_svstat(process_name)
+
 def _collect_processes() -> list[dict]:
+    configured = set(_configured_project_ids())
     services = list_services()
     processes: list[dict] = []
     needs_rescan = False
     for name in services:
+        # 取消登记后残留的 s6 目录不再展示为设备卡片
+        if name not in configured:
+            continue
         parsed = s6_svstat(name)
         if not parsed:
-
-            needs_rescan = True
-            processes.append({
-                "name": name,
-                "status": "PENDING",
-                "pid": None,
-                "uptime": "0:00:00",
-                "paused": False,
-                "auto_paused": False,
-                "cpu": None,
-                "cpu_history": [],
-            })
-            continue
+            healed = _heal_stale_supervise(name)
+            if healed:
+                parsed = healed
+            else:
+                needs_rescan = True
+                processes.append({
+                    "name": name,
+                    "status": "PENDING",
+                    "pid": None,
+                    "uptime": "0:00:00",
+                    "paused": False,
+                    "auto_paused": False,
+                    "cpu": None,
+                    "cpu_history": [],
+                })
+                continue
         pname = parsed["name"]
         if parsed["status"] == "BACKOFF":
             FAILURE_COUNTS[pname] += 1
@@ -229,8 +263,9 @@ def _collect_processes() -> list[dict]:
     if needs_rescan:
         s6_rescan()
 
-    for raw_id in _configured_project_ids():
-        if raw_id in services:
+    known = {p["name"] for p in processes}
+    for raw_id in configured:
+        if raw_id in known:
             continue
         processes.append(_placeholder_for(raw_id))
 
@@ -525,6 +560,15 @@ async def _wait_for_status(process_name: str, expected: str | None) -> bool:
                 return True
     return False
 
+async def _wait_for_supervise(process_name: str, attempts: int = 15) -> bool:
+    """rescan 后等待 s6-supervise 监听，便于后续 s6-svc / svstat。"""
+    for _ in range(attempts):
+        parsed = s6_svstat(process_name)
+        if parsed is not None:
+            return True
+        await asyncio.sleep(0.4)
+    return False
+
 @app.route('/service/<action>/<process_name>', methods=['POST'])
 async def manage_service_process(action, process_name):
     logger.info(f"Received {action} request for process: {process_name}")
@@ -566,8 +610,16 @@ async def manage_service_process(action, process_name):
                     "status": "error",
                     "message": f"服务 {process_name} 没有运行脚本"
                 }), 404
+            # 先清孤儿，避免端口占用导致反复退出却仍有日志
+            _kill_orphans(process_name)
             update_process_code(process_name)
             s6_rescan()
+            # 僵死 supervise 时先自愈，再等待就绪后启动
+            if s6_svstat(process_name) is None:
+                _heal_stale_supervise(process_name, force=True)
+            await _wait_for_supervise(process_name)
+            PAUSED_BY_SYSTEM.discard(process_name)
+            FAILURE_COUNTS[process_name] = 0
             result = s6_svc("-u", process_name)
             expected = "RUNNING"
 
@@ -697,7 +749,8 @@ def delete_service_logs(process_name: str) -> None:
 
 def _kill_orphans(process_name: str) -> None:
     workdir = _project_workdir(process_name)
-    patterns = [str(workdir)]
+    workdir_resolved = str(workdir.resolve()) if workdir.exists() else str(workdir)
+    patterns = [workdir_resolved, str(workdir)]
 
     for pat in patterns:
         try:
@@ -710,6 +763,29 @@ def _kill_orphans(process_name: str) -> None:
             )
         except Exception as exc:
             logger.debug(f"_kill_orphans({process_name}) pkill {pat} failed: {exc}")
+
+    # pkill -f 只匹配命令行；项目进程 argv 可能不含路径，再按 cwd 清理
+    try:
+        for proc_dir in Path("/proc").iterdir():
+            if not proc_dir.name.isdigit():
+                continue
+            try:
+                cwd = (proc_dir / "cwd").resolve()
+            except OSError:
+                continue
+            if str(cwd) != workdir_resolved and not str(cwd).startswith(workdir_resolved + "/"):
+                continue
+            pid = int(proc_dir.name)
+            try:
+                # 跳过本进程
+                if pid == os.getpid():
+                    continue
+                os.kill(pid, 9)
+                logger.info(f"_kill_orphans({process_name}): killed pid {pid} cwd={cwd}")
+            except OSError:
+                pass
+    except Exception as exc:
+        logger.debug(f"_kill_orphans({process_name}) /proc scan failed: {exc}")
 
 def thoroughly_cleanup(process_name: str) -> None:
     _kill_orphans(process_name)
@@ -940,21 +1016,21 @@ async def _apply_project_service(entry: dict, *, start: bool = True) -> None:
     command = cluster["run_command"]
     write_service(cluster, command)
     s6_rescan()
+    # 等 supervise 就绪后再 -u，避免「supervise not listening」
+    await _wait_for_supervise(cluster["id"])
     if start:
-        # 若曾 stop 卸掉 run，先恢复
         _restore_run(cluster["id"])
         s6_svc("-u", cluster["id"])
+        await _wait_for_status(cluster["id"], "RUNNING")
 
 async def _unapply_project_service(project_id: str) -> None:
-    from worker.s6_config import remove_service
+    from worker.s6_config import teardown_service
 
     slug = _slug(project_id)
     svc = _svc_path(slug)
     if svc.is_dir():
-        _run_cmd(["s6-svc", "-wD", "-d", str(svc)], timeout=15, quiet=True)
         _kill_orphans(slug)
-        await _wait_for_status(slug, None)
-        remove_service(slug)
+        await asyncio.get_event_loop().run_in_executor(None, teardown_service, slug)
         STOPPED_SERVICE_SCRIPTS.pop(slug, None)
     s6_rescan()
 
