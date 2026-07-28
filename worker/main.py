@@ -24,8 +24,10 @@ async def _main_async(clusters: list[dict]) -> None:
 
     defaults = load_defaults(CONFIG_FILE)
     dnf_packages = defaults.get("dnf_packages") or []
+    # 系统包装在后台装，避免阻塞写出 s6 服务；否则仪表盘已就绪时点「启动」会报没有 run
+    dnf_fut = None
     if dnf_packages:
-        await asyncio.get_event_loop().run_in_executor(
+        dnf_fut = asyncio.get_event_loop().run_in_executor(
             None, install_system_packages, dnf_packages
         )
 
@@ -41,6 +43,9 @@ async def _main_async(clusters: list[dict]) -> None:
     else:
         logger.info("Starting project manager...")
         await start_all_projects(clusters)
+
+    if dnf_fut is not None:
+        await dnf_fut
 
     try:
         READY_FLAG.parent.mkdir(parents=True, exist_ok=True)

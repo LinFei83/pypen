@@ -64,8 +64,7 @@ def _resolve_service_name(raw_id: str) -> str | None:
 
 async def _do_start(service: str) -> None:
     from app.routes.routes import (
-        _restore_run,
-        _svc_path,
+        _ensure_run_script,
         _wait_for_status,
         broadcast_status_update,
         s6_rescan,
@@ -73,8 +72,9 @@ async def _do_start(service: str) -> None:
         update_process_code,
     )
 
-    if not _restore_run(service) and not (_svc_path(service) / "run").exists():
-        logger.warning(f"cron: cannot start {service}: no run script")
+    ensure_err = _ensure_run_script(service)
+    if ensure_err:
+        logger.warning(f"cron: cannot start {service}: {ensure_err.get('message')}")
         return
     update_process_code(service)
     s6_rescan()

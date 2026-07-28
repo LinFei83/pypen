@@ -484,6 +484,32 @@ def _restore_run(process_name: str) -> bool:
     del STOPPED_SERVICE_SCRIPTS[process_name]
     return True
 
+def _rebuild_service_from_toml(process_name: str) -> dict | None:
+    """从 project.toml 重建 s6 服务目录与 run。成功返回 None，失败返回 error dict。"""
+    from worker.s6_config import write_service
+    from worker.toml_store import entry_to_cluster, read_raw_projects
+
+    entry = next((p for p in read_raw_projects() if p["id"] == process_name), None)
+    if entry is None:
+        return {"status": "error", "message": f"project.toml 中没有 {process_name}"}
+    command = str(entry.get("run_command") or "").strip()
+    if not command:
+        return {"status": "error", "message": f"项目 {process_name} 未配置 run_command"}
+    workdir = _project_workdir(process_name)
+    if not workdir.is_dir():
+        return {"status": "error", "message": f"项目目录不存在：{workdir}"}
+    write_service(entry_to_cluster(entry), command)
+    logger.info(f"已从 project.toml 重建 s6 服务: {process_name}")
+    return None
+
+def _ensure_run_script(process_name: str) -> dict | None:
+    """保证 run 存在：先恢复停止时缓存的脚本，否则从 toml 重建。"""
+    if _restore_run(process_name):
+        return None
+    if (_svc_path(process_name) / "run").exists():
+        return None
+    return _rebuild_service_from_toml(process_name)
+
 async def _wait_for_status(process_name: str, expected: str | None) -> bool:
     for _ in range(MAX_STATUS_CHECK_ATTEMPTS):
         await asyncio.sleep(STATUS_CHECK_INTERVAL)
@@ -541,11 +567,11 @@ async def manage_service_process(action, process_name):
             expected = None
 
         elif action == "start":
-            if not _restore_run(process_name) and not (_svc_path(process_name) / "run").exists():
-                return jsonify({
-                    "status": "error",
-                    "message": f"服务 {process_name} 没有运行脚本"
-                }), 404
+            # 容器刚启动时 worker 可能还在装系统包、尚未写出 run；
+            # 停止后 run 仅缓存在内存，重启进程也会丢失 —— 缺失时从 toml 重建。
+            ensure_err = _ensure_run_script(process_name)
+            if ensure_err:
+                return jsonify(ensure_err), 404
             # 先清孤儿，避免端口占用导致反复退出却仍有日志
             _kill_orphans(process_name)
             update_process_code(process_name)
