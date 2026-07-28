@@ -246,6 +246,8 @@ function buildCard(tpl, process) {
         } else {
             appendButton(topRow, '暂停', '', ICONS.pause, () => action('pause', name));
         }
+        appendButton(topRow, '停止', 'ctrl-danger', ICONS.stop,
+            () => confirmAction(`停止 ${name}？进程将退出，需再次启动才能运行。`, () => action('stop', name)));
         appendButton(topRow, '重启', '', ICONS.restart,
             () => confirmAction(`重启 ${name}？`, () => action('restart', name)));
     } else {
@@ -413,6 +415,18 @@ function action(verb, processName) {
                     lastKnownProcesses = lastKnownProcesses.map((p) => {
                         if (p.name !== processName) return p;
                         return { ...p, paused: verb === 'pause' };
+                    });
+                    renderDashboard(lastKnownProcesses);
+                } else if (verb === 'stop') {
+                    lastKnownProcesses = lastKnownProcesses.map((p) => {
+                        if (p.name !== processName) return p;
+                        return {
+                            ...p,
+                            status: 'STOPPED',
+                            paused: false,
+                            pid: null,
+                            cpu: null,
+                        };
                     });
                     renderDashboard(lastKnownProcesses);
                 }
